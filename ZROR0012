@@ -1,0 +1,3472 @@
+*-----------------------------------------------------------------------
+* REPORT ZROR0012 - Delivery In Full and On Time (DIFOT) Report
+************************* NOTE ****************************************
+*-----------------------------------------------------------------------
+*
+* This report measures the performance of the delivery execution against
+* the requested delivery date by customers.
+*
+*-----------------------------------------------------------------------
+* Date       Name         Corr./Rep. Reason
+* ---------- ------------ ---------- -----------------------------------
+*  19/04/11  P.Eudey      SD1K964681 WR00908/WRT10692 - Initial report
+*  16/05/11  P.Eudey      SD1K964902 WR00908/WRT10692 - Mods to report
+*  19/05/11  P.Eudey      SD1K964933 WR00908/WRT10692 - Mods to report
+*  06/07/11  P.Eudey      SD1K965416 INC180425 - Restrict ALV layout
+*                                    change
+*  21/10/11  P.Eudey      SD1K967755 INC188409/ITASK23836 - Subtotal
+*                                    print problem
+*  17/05/12  P.Eudey      SD1K970446 INC272582 - Quantity tolerance
+*                                    problem
+*  01/08/14  Atul Saurabh SD1K977142 INC1577313- Output Column Issue
+*  05/02/16  HOOPEKRI     SD1K991986 CHG0099974 Include undelivered
+*                                    rejected items.
+*  05/02/16  HOOPEKRI     SD1K993079 CHG0131119 - Add option to sum
+*                                    DIFOT hits across entire order (ie.
+*                                    not just for same day deliveries)
+*  27/07/16  HOOPEKRI     SD1K993187 CHG0131119 Correct issue with
+*                                    subtotalling.
+*  27/03/17  HOOPEKRI     SD1K994923 R1144 - Use original order quantity
+*  19/05/17  HOOPEKRI     SD1K995320 R1144 - Use RC code from higher
+*                                    level item if changed there (QTY)
+*  19/05/17  HOOPEKRI     SD1K995353 R1144 - Use RC code from higher
+*                                    level item if changed there (DATE)
+*  16/10/17  P.Eudey      SD1K996384 28710 - Update to hide options and
+*                         SD1K996429 re-label columns
+*                         SD1K996431
+*  05/12/17  HOOPEKRI     SD1K996672 R6760 - Subtract non-work days from
+*                                    tolerances.
+*  16/01/18  HOOPEKRI     SD1K996911 R7492 - Use LIKP-WADAT instead of
+*                                    LIPS-ZZ_WADAT for Planned GI Date
+*  22/01/18  HOOPEKRI     SD1K996991 R7654 - Assess all Delivery Dates
+*                       & SD1K997031 for DOT calculation, not just last.
+*  06/03/18  HOOPEKRI     SD1K997352 R8737 - DIFOT calculation and
+*                                    subtotalling errors.
+*  11/12/18  ORTEGJAM     SD1K999997 R35450 -Added button to call report
+*                                    for displaying quantity tolerances
+*  31/07/20  HOOPEKRI     SD1K9A02DK R87175 - DIF calculation UOM issue
+*  30/09/20  HOOPEKRI     SD1K9A02UE R93757 - DIF calculation UOM issue
+*  17/06/21  P.Eudey      SD1K9A04GZ R119910 - S31320 Add Retailer
+*                                    selection and detail
+*  18/05/22  K.Hooper   & SD1K9A06BU C440 - Ability to have 1 score per
+*                         SD1K9A06CQ sales BOM for specific sites.
+*  24/05/22  K.Hooper     SD1K9A06D8 C457 - Extract to table for DW
+*                                    for items with special processing.
+*  04/08/22  K.Hooper     SD1K9A06MR C662 - Sub-total issue
+*-----------------------------------------------------------------------
+REPORT zror0012
+                 NO STANDARD PAGE HEADING
+                 LINE-COUNT  58
+                 LINE-SIZE   255
+                 MESSAGE-ID  zs.
+
+************************************************************************
+*                                                                      *
+* DATA DECLARATIONS SECTION                                            *
+*                                                                      *
+************************************************************************
+*----------------------------------------------------------------------*
+* TYPES or TYPE-POOLS                                                  *
+*----------------------------------------------------------------------*
+TYPE-POOLS: slis.
+*----------------------------------------------------------------------*
+* TABLES                                                               *
+*----------------------------------------------------------------------*
+TABLES: kna1,                          " customer master
+        knvv,                          " customer master sales data
+        mara,                          " material master
+        mvke,                          " sales data for material
+        tvak,                          " sales doc types
+        tvkwz,                         " plants in sls org
+        tvtw,                          " distribution channels
+        vbak,                          " sales header
+        vbap,                          " sales doc items
+        vbep,                          " schedule line data
+        vbfa,                          " sales doc flow
+        vbpa,                          " sales doc partners
+        likp,                          " delivery header data
+        ekko,                          " purchasing doc header
+        zdifot_rc,                     " DIFOT reason codes
+        zdifot_tol,                    " DIFOT tolerances
+        sscrfields,
+        zbc_alv_layout. " Users who can set default ALV layouts per tran
+
+*----------------------------------------------------------------------*
+* SELECTION SCREEN                                                     *
+*----------------------------------------------------------------------*
+SELECTION-SCREEN FUNCTION KEY 1 .
+SELECTION-SCREEN BEGIN OF BLOCK selections WITH FRAME TITLE text-000.
+SELECT-OPTIONS:
+          s_vtweg FOR vbak-vtweg OBLIGATORY MEMORY ID vtw,   " Dist ch
+          s_werks FOR vbap-werks MEMORY ID wrk OBLIGATORY,   " Plant
+          s_kunnr FOR kna1-kunnr MATCHCODE OBJECT debi,      " Sold-to
+          s_kunwe FOR kna1-kunnr MATCHCODE OBJECT debi,      " Ship-to
+          s_mtart FOR mara-mtart DEFAULT 'Z001' TO 'Z004',   " Matl type
+          s_mvgr5 FOR mvke-mvgr5,                            " Matl gr 5
+          s_matnr FOR vbap-matnr MATCHCODE OBJECT mat1,      " Matl
+          s_auart FOR vbak-auart,                       " Sales doc type
+          s_vbeln FOR vbak-vbeln MATCHCODE OBJECT vmva,      " Sale doc#
+          s_kunzr FOR kna1-kunnr,                            " Retailer
+          s_edatu FOR vbep-edatu DEFAULT sy-datum
+              OBLIGATORY,"Req del date
+          s_erdat FOR vbak-erdat,                            " Cr date
+          s_ernam FOR vbak-ernam,                           " Created by
+          s_wadat FOR likp-wadat_ist.                       " GI date
+SELECTION-SCREEN END OF BLOCK selections.
+*---------------------------------------
+* Options for displaying further details
+SELECTION-SCREEN BEGIN OF BLOCK displays WITH FRAME TITLE text-016.
+PARAMETERS: "p_nocon  TYPE char1 NO-DISPLAY,
+  "p_consam TYPE char1 NO-DISPLAY,
+  "p_contol TYPE char1 DEFAULT 'X' NO-DISPLAY,
+*PARAMETERS: p_nocon  RADIOBUTTON GROUP cons,    "Ins SD1K993079
+**            p_conso  AS CHECKBOX DEFAULT ' ',  "Del SD1K993079
+*            p_consam RADIOBUTTON GROUP cons,    "Ins SD1K993079
+*         p_contol RADIOBUTTON GROUP cons DEFAULT 'X', "Ins SD1K993079
+  p_subt   AS CHECKBOX,
+  p_incund AS CHECKBOX.    "Ins SD1K991986
+PARAMETERS: p_sto AS CHECKBOX.                        "Include STO data
+SELECT-OPTIONS: s_bsart  FOR ekko-bsart DEFAULT 'UB', "PO type
+                s_ebeln  FOR ekko-ebeln.              "Purchasing Doc.
+SELECTION-SCREEN END OF BLOCK displays.
+SELECTION-SCREEN BEGIN OF BLOCK alv WITH FRAME TITLE text-106.
+PARAMETERS: p_agrd  RADIOBUTTON GROUP rep,
+            p_alis  RADIOBUTTON GROUP rep,
+            p_var   LIKE disvariant-variant,
+            p_dw_sp AS CHECKBOX.
+SELECTION-SCREEN END OF BLOCK alv.
+
+*----------------------------------------------------------------------*
+* TYPES
+*----------------------------------------------------------------------*
+TYPES: BEGIN OF t_date,
+         year(4)  TYPE c,
+         month(2) TYPE c,
+         day(2)   TYPE c,
+       END OF t_date.
+
+*----------------------------------------------------------------------*
+* DATA - STRUCTURE
+*----------------------------------------------------------------------*
+DATA: BEGIN OF st_rep_alv1,
+        vkorg                 LIKE vbak-vkorg,
+        vtweg                 LIKE vbak-vtweg,
+        werks                 LIKE vbap-werks,
+        kunnr                 LIKE vbpa-kunnr,
+        name1                 LIKE kna1-name1,
+        kunwe                 LIKE vbpa-kunnr,
+        name2                 LIKE kna1-name1    , " ship-to cust name
+        bstnk                 LIKE vbak-bstnk,
+        vbeln                 LIKE vbak-vbeln,
+        posnr                 LIKE vbap-posnr,
+        uepos                 LIKE vbap-uepos,   "Ins SD1K995320
+        erdat                 LIKE vbak-erdat,
+        ernam                 LIKE vbak-ernam,
+        etenr                 LIKE vbep-etenr,
+        matnr                 LIKE vbap-matnr,
+        maktx                 LIKE makt-maktx,
+        kwmeng                LIKE vbap-kwmeng,
+        vrkme                 LIKE vbap-vrkme,
+        klmeng                LIKE vbap-klmeng,
+        meins                 LIKE vbap-meins,
+        wmeng                 LIKE vbep-wmeng,
+        zz_wmeng_org          LIKE vbep-zz_wmeng_org, "Ins SD1K994923
+        zz_vrkme_org          LIKE vbep-zz_vrkme_org, "Ins SD1K994923
+        zz_wmeng_org_calc     LIKE vbep-zz_wmeng_org, "Ins SD1K994923
+        zz_vrkme_org_calc     LIKE vbep-zz_vrkme_org, "Ins SD1K994923
+        lmeng                 LIKE vbep-lmeng,
+        edatu                 LIKE vbep-edatu,
+        wadat                 LIKE vbep-wadat,
+        zz_wadat_org          LIKE vbep-zz_wadat_org,
+        zz_wadat_org_calc     LIKE vbep-zz_wadat_org, "Ins SD1K994923
+        wadat_ist             LIKE likp-wadat_ist,
+        vbeln_d               LIKE likp-vbeln,
+        posnr_d               LIKE lips-posnr,
+        vstel                 LIKE likp-vstel,
+        lfimg                 LIKE lips-lfimg,
+        vrkme_d               LIKE lips-vrkme,
+        lfmng                 LIKE lips-lfimg,
+        lfmng_c               LIKE lips-lfimg,
+        lfmng_c_p             TYPE p DECIMALS 2,      "Ins SD1K993079
+        line_t                TYPE i,
+        dif_o                 TYPE i,                "Ins SD1K994923
+        dif_op                TYPE i,                "Ins SD1K994923
+        dif                   TYPE i,
+        dif_p                 TYPE i,
+        dot_o                 TYPE i,
+        dot_op                TYPE i,
+        dot                   TYPE i,
+        dot_p                 TYPE i,
+        difot_o               TYPE i,
+        difot_op              TYPE i,
+        difot                 TYPE i,
+        difot_p               TYPE i,
+        zz_rcode              LIKE vbep-zz_rcode,
+        rtext                 LIKE zdifot_rc-rtext,
+        zz_rc_cust            LIKE vbep-zz_rc_cust,
+        zz_rcode_qty          LIKE vbep-zz_rcode_qty, "Ins SD1K994923
+        rtext_qty             LIKE zdifot_rc-rtext,   "Ins SD1K994923
+        zz_rc_cust_qty        LIKE vbep-zz_rc_cust_qty, "Ins SD1K994923
+        abgru                 LIKE vbap-abgru,
+        ztolqp                LIKE zdifot_tol-ztolqp,
+        ztolqm                LIKE zdifot_tol-ztolqm,
+        ztoldp                LIKE knvv-kvgr2,
+        ztoldm                LIKE knvv-kvgr3,
+        vbeln_con             LIKE likp-vbeln,
+        posnr_con             LIKE lips-posnr,        "Ins SD1K993079
+        mvgr5                 LIKE mvke-mvgr5,
+        order_item_sch_sl(17) TYPE c,                 "Ins SD1K993079
+        pur_order             TYPE c,
+        kunzr                 LIKE a560-zzretail,
+        namer                 LIKE kna1-name1,
+        pstyv                 LIKE vbap-pstyv,
+*        coltab                type lvc_t_scol,
+        coltab                TYPE slis_t_specialcol_alv,
+      END OF st_rep_alv1.
+
+*----------------------------------------------------------------------*
+* DATA - INTERNAL TABLES                                               *
+*----------------------------------------------------------------------*
+* Field sorting/totalling
+DATA: it_fieldsort   LIKE zfldsort   OCCURS  0 WITH HEADER LINE.
+
+DATA: BEGIN OF it_vbak OCCURS 0,
+        vbeln LIKE vbak-vbeln,
+        erdat LIKE vbak-erdat,
+        ernam LIKE vbak-ernam,
+        vkorg LIKE vbak-vkorg,
+        vtweg LIKE vbak-vtweg,
+        kunnr LIKE vbak-kunnr,
+        bstnk LIKE vbak-bstnk,
+        kunwe LIKE vbpa-kunnr,
+        kunzr LIKE vbpa-kunnr,
+      END OF it_vbak.
+
+DATA: BEGIN OF it_vbap OCCURS 0,
+        vbeln  LIKE vbak-vbeln,
+        posnr  LIKE vbap-posnr,
+        uepos  LIKE vbap-uepos,   "Ins SD1K995320
+        erdat  LIKE vbak-erdat,
+        ernam  LIKE vbak-ernam,
+        vkorg  LIKE vbak-vkorg,
+        vtweg  LIKE vbak-vtweg,
+        kunnr  LIKE vbak-kunnr,
+        bstnk  LIKE vbak-bstnk,
+        matnr  LIKE vbap-matnr,
+        abgru  LIKE vbap-abgru,
+        meins  LIKE vbap-meins,
+        kwmeng LIKE vbap-kwmeng,
+        klmeng LIKE vbap-klmeng,
+        vrkme  LIKE vbap-vrkme,
+        werks  LIKE vbap-werks,
+        vstel  LIKE vbap-vstel,   "Ins SD1K996672
+        kunwe  LIKE vbpa-kunnr,
+        mvgr5  LIKE mvke-mvgr5,
+        kunzr  LIKE vbpa-kunnr,
+        pstyv  LIKE vbap-pstyv,
+      END OF it_vbap.
+
+DATA: BEGIN OF it_vbap_t OCCURS 0,
+        werks  LIKE vbap-werks,
+        vbeln  LIKE vbak-vbeln,
+        posnr  LIKE vbap-posnr,
+        uepos  LIKE vbap-uepos,   "Ins SD1K995320
+        matnr  LIKE vbap-matnr,
+        abgru  LIKE vbap-abgru,
+        meins  LIKE vbap-meins,
+        kwmeng LIKE vbap-kwmeng,
+        klmeng LIKE vbap-klmeng,
+        vrkme  LIKE vbap-vrkme,
+        vstel  LIKE vbap-vstel,   "Ins SD1K996672
+        pstyv  LIKE vbap-pstyv,
+      END OF it_vbap_t.
+
+DATA: BEGIN OF it_vbep OCCURS 0,
+        vbeln          LIKE vbak-vbeln,
+        posnr          LIKE vbap-posnr,
+        uepos          LIKE vbap-uepos,   "Ins SD1K995320
+        edatu          LIKE vbep-edatu,
+        wadat          LIKE vbep-wadat,
+        vkorg          LIKE vbak-vkorg,
+        vtweg          LIKE vbak-vtweg,
+        werks          LIKE vbap-werks,
+        vstel          LIKE vbap-vstel,   "Ins SD1K996672
+        erdat          LIKE vbak-erdat,
+        ernam          LIKE vbak-ernam,
+        kunnr          LIKE vbpa-kunnr,
+        kunwe          LIKE vbpa-kunnr,
+        bstnk          LIKE vbak-bstnk,
+        matnr          LIKE vbap-matnr,
+        kwmeng         LIKE vbap-kwmeng,
+        vrkme          LIKE vbap-vrkme,
+        klmeng         LIKE vbap-klmeng,
+        meins          LIKE vbap-meins,
+        abgru          LIKE vbap-abgru,
+        etenr          LIKE vbep-etenr,
+        wmeng          LIKE vbep-wmeng,
+        lmeng          LIKE vbep-lmeng,
+        zz_wadat_org   LIKE vbep-zz_wadat_org,
+        zz_rcode       LIKE vbep-zz_rcode,
+        rtext          LIKE zdifot_rc-rtext,
+        zz_rc_cust     LIKE vbep-zz_rc_cust,
+        zz_wmeng_org   LIKE vbep-zz_wmeng_org,     "Ins SD1K994923
+        zz_vrkme_org   LIKE vbep-zz_vrkme_org,     "Ins SD1K994923
+        zz_rcode_qty   LIKE vbep-zz_rcode_qty,     "Ins SD1K994923
+        rtext_qty      LIKE zdifot_rc-rtext,       "Ins SD1K994923
+        zz_rc_cust_qty LIKE vbep-zz_rc_cust_qty,   "Ins SD1K994923
+        mvgr5          LIKE mvke-mvgr5,
+        pur_order(1),                              "STO
+        kunzr          LIKE vbpa-kunnr,
+        pstyv          LIKE vbap-pstyv,
+      END OF it_vbep.
+
+DATA: BEGIN OF it_lips OCCURS 0,
+        vbeln          LIKE vbak-vbeln,
+        posnr          LIKE vbap-posnr,
+        uepos          LIKE vbap-uepos,   "Ins SD1K995320
+        vbelnposnr(16) TYPE c,          "S.Ord and item (SD1K993079)
+        wadat_ist      LIKE likp-wadat_ist,
+        vbeln_d        LIKE likp-vbeln,
+        posnr_d        LIKE lips-posnr,
+        vstel          LIKE likp-vstel,
+        wadat          LIKE likp-wadat, "Ins SD1K996672
+        lfimg          LIKE lips-lfimg, "Actual quantity delivered
+        vrkme_d        LIKE lips-vrkme,
+        lfmng          LIKE lips-lfimg, "BaseDelQty
+        zz_wadat       LIKE lips-zz_wadat,
+        procd(1)       TYPE c,
+        vbeln_con      LIKE likp-vbeln,
+        posnr_con      LIKE lips-posnr, "Consolid. item (SD1K993079)
+        lfimg_c        LIKE lips-lfimg,
+        lfmng_c        LIKE lips-lfimg,
+      END OF it_lips.
+
+DATA: BEGIN OF it_kunnr OCCURS 0,
+        kunnr LIKE kna1-kunnr,
+        name1 LIKE kna1-name1,
+      END OF it_kunnr,
+      BEGIN OF it_kunwe OCCURS 0,
+        kunwe LIKE kna1-kunnr,
+        name1 LIKE kna1-name1,
+      END OF it_kunwe,
+      BEGIN OF it_kunzr OCCURS 0,
+        kunzr LIKE kna1-kunnr,
+        namer LIKE kna1-name1,
+      END OF it_kunzr,
+      BEGIN OF it_makt OCCURS 0,
+        matnr LIKE makt-matnr,
+        maktx LIKE makt-maktx,
+      END OF it_makt,
+      BEGIN OF it_rtext OCCURS 0,
+        zz_rcode LIKE zdifot_rc-rcode,
+        rtext    LIKE zdifot_rc-rtext,
+      END OF it_rtext,
+      BEGIN OF it_told OCCURS 0,
+        kunnr  LIKE knvv-kunnr,
+        vkorg  LIKE knvv-vkorg,
+        vtweg  LIKE knvv-vtweg,
+        ztoldp LIKE knvv-kvgr2,
+        ztoldm LIKE knvv-kvgr3,
+      END OF it_told,
+      BEGIN OF it_prodh OCCURS 0,
+        matnr LIKE mvke-matnr,
+        vkorg LIKE mvke-vkorg,
+        vtweg LIKE mvke-vtweg,
+        prodh LIKE mvke-prodh,
+      END OF it_prodh,
+      BEGIN OF it_tolq OCCURS 0,
+        werks    LIKE zdifot_tol-werks,
+        kunnr    LIKE zdifot_tol-kunnr,
+        prodhier LIKE zdifot_tol-prodhier,
+        matnr    LIKE zdifot_tol-matnr,
+        ztolqp   LIKE zdifot_tol-ztolqp,
+        ztolqm   LIKE zdifot_tol-ztolqm,
+      END OF it_tolq,
+      BEGIN OF it_subt OCCURS 0,
+        dif_o   TYPE i,     "Ins SD1K994923
+        dif     TYPE i,
+        dot_o   TYPE i,
+        dot     TYPE i,
+        difot_o TYPE i,
+        difot   TYPE i,
+        cnt     TYPE i,
+      END OF it_subt,
+      BEGIN OF it_redu OCCURS 0,
+        vbeln     LIKE vbap-vbeln,
+        posnr     LIKE vbap-posnr,
+        wadat_ist LIKE likp-wadat_ist,
+      END OF it_redu.
+
+DATA: it_difot LIKE st_rep_alv1 OCCURS 0 WITH HEADER LINE,
+      BEGIN OF it_difot_delivery_dates OCCURS 0,
+        vbeln             LIKE vbak-vbeln,
+        posnr             LIKE vbap-posnr,
+        wadat             LIKE vbep-wadat,
+        zz_wadat_org_calc LIKE vbep-zz_wadat_org,
+        ztoldp            LIKE knvv-kvgr2,
+        ztoldm            LIKE knvv-kvgr3,
+        wadat_ist         LIKE likp-wadat_ist,
+      END OF it_difot_delivery_dates.
+DATA: it_difot_t LIKE st_rep_alv1 OCCURS 0 WITH HEADER LINE.
+
+DATA: lt_coltab TYPE slis_t_specialcol_alv,
+      ls_coltab TYPE slis_specialcol_alv,
+*      ls_coltab type lvc_s_scol,
+      ls_col    TYPE lvc_s_colo.
+
+DATA: it_tvtw LIKE tvtw OCCURS 0 WITH HEADER LINE.
+
+DATA: BEGIN OF it_bdcdata OCCURS 0.
+        INCLUDE STRUCTURE bdcdata.
+DATA: END OF it_bdcdata.
+
+
+*----------------------------------------------------------------------*
+* DATA - VARIABLES                                                     *
+*----------------------------------------------------------------------*
+
+DATA: v_mtart             LIKE mara-mtart,
+      v_mvgr5             LIKE mvke-mvgr5,
+      v_umvkz             LIKE lips-umvkz,
+      v_kunwe             LIKE vbpa-kunnr,
+      v_kunzr             LIKE vbpa-kunnr,
+      v_lfimg             LIKE lips-lfimg,
+      v_lfmng             LIKE lips-lfimg,
+      v_reduce            TYPE i,
+      v_umvkn             LIKE lips-umvkn,
+      v_wbstk             LIKE vbuk-wbstk,
+      v_vstel             LIKE likp-vstel,
+      v_wadat_ist         LIKE likp-wadat_ist,
+      v_vbeln_d           LIKE likp-vbeln,
+      v_posnr_d           LIKE lips-posnr,      "Ins SD1K993079
+      v_vbeln_h           LIKE likp-vbeln,
+      v_posnr_h           LIKE lips-posnr,      "Ins SD1K993079
+      v_tabix             LIKE sy-tabix,
+      v_under_qty         LIKE lips-lfimg,
+      v_over_qty          LIKE lips-lfimg,
+      v_date_early        LIKE sy-datum,
+      v_date_late         LIKE sy-datum,
+      v_value             LIKE cdpos-value_old,
+      v_tabkey            LIKE cdpos-tabkey,
+      v_legacy_qty_reason TYPE zzdifot_rt, "Ins SD1K994923
+      v_hold_wmeng        LIKE vbep-wmeng.
+
+DATA: v_repid   LIKE sy-repid,
+      v_params  LIKE ctu_params,
+      v_prin(1) TYPE c.
+
+*ALV Formatting tables / structures / variables
+DATA: it_fieldcat   TYPE slis_t_fieldcat_alv,
+      w_fieldcat    TYPE slis_fieldcat_alv,
+      it_events     TYPE slis_t_event,
+      w_events      TYPE slis_alv_event,
+      it_event_exit TYPE slis_t_event_exit,
+      w_event_exit  TYPE slis_event_exit,
+      it_page       TYPE slis_t_listheader,
+      it_sort       TYPE slis_t_sortinfo_alv,
+      w_sort        TYPE slis_sortinfo_alv,
+      v_month(10)   TYPE c,
+      w_page        TYPE slis_listheader,
+      w_date        TYPE t_date,
+      w_layout      TYPE slis_layout_alv,
+      w_variant2    LIKE disvariant,
+      w_variant     LIKE disvariant,
+      v_exit(1)     TYPE c,
+      v_save(1)     TYPE c,
+      w_tabname     TYPE slis_tabname,
+*      v_flag             TYPE flag,
+      v_func(60)    TYPE c.
+
+*----------------------------------------------------------------------*
+* CONSTANTS                                                            *
+*----------------------------------------------------------------------*
+CONSTANTS: c_true(1)     TYPE c   VALUE 'X',
+           c_false(1)    TYPE c   VALUE ' ',
+           c_own_reason  TYPE zzdifot_rt VALUE 'O',
+           c_cust_reason TYPE zzdifot_rt VALUE 'C'.
+
+*----------------------------------------------------------------------*
+* RANGES                                                               *
+*----------------------------------------------------------------------*
+RANGES:
+  r_werks   FOR tvkwz-werks,        "list of plants for distr channel
+  r_vkorg   FOR tvkov-vkorg.        "Sales Organizations
+
+
+************************************************************************
+*                                                                      *
+* EVENT SECTION                                                        *
+*                                                                      *
+************************************************************************
+
+*----------------------------------------------------------------------*
+* INITIALIZATION                                                       *
+*----------------------------------------------------------------------*
+INITIALIZATION.
+
+  w_tabname = 'ST_REP_ALV1'.
+  PERFORM f_setup_order_types.
+  PERFORM get_default_layout.
+  CLEAR v_params.
+  MOVE 'E' TO v_params-dismode.
+  MOVE 'S' TO v_params-updmode.
+  MOVE c_false TO v_params-defsize.
+  MOVE c_true TO v_params-racommit.
+  MOVE c_true TO v_params-nobinpt.
+  REFRESH: lt_coltab.
+  CLEAR: ls_coltab, ls_col.
+  ls_coltab-color-col = 5.
+  ls_coltab-color-int = 0.
+  ls_coltab-color-inv = 0.
+  ls_coltab-fieldname = 'DIFOT_OP'.
+  APPEND ls_coltab TO lt_coltab.
+  sscrfields-functxt_01 = text-350.
+
+*----------------------------------------------------------------------*
+* AT SELECTION-SCREEN                                                  *
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN.
+  PERFORM alv_assign_layout.
+  PERFORM z01_verify_screen_data.
+  PERFORM button_click.
+
+*ALV variant (layout)
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_var.
+  PERFORM f4_for_variant.
+
+AT SELECTION-SCREEN OUTPUT.
+  PERFORM selection_screen_output.
+
+*----------------------------------------------------------------------*
+* START-OF-SELECTION                                                   *
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+
+*----------------------------------------------------------------------*
+* END-OF-SELECTION                                                     *
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+
+  PERFORM a00_get_output_options.
+  PERFORM a01_select_data.
+
+  PERFORM alv_build_fieldcat.
+  PERFORM alv_output.
+
+************************************************************************
+*                                                                      *
+* SUBROUTINES                                                          *
+*                                                                      *
+************************************************************************
+
+*---------------------------------------------------------------------*
+*       FORM A00_GET_OUTPUT_OPTIONS                                   *
+*---------------------------------------------------------------------*
+FORM a00_get_output_options.
+
+* Get handling method for quantity changes made prior to development
+* which adds custom fields to VBEP to store quantity change reason
+* codes (SD1K994923).
+  CLEAR: v_legacy_qty_reason.
+  SELECT SINGLE data
+    FROM zs002
+    INTO v_legacy_qty_reason
+   WHERE werks = ''
+     AND vtweg = ''
+     AND accky = 'ZS103QTYREASON'.
+
+  IF sy-subrc NE 0 OR v_legacy_qty_reason NE c_cust_reason.
+    v_legacy_qty_reason = c_own_reason.
+  ENDIF.
+
+ENDFORM.
+
+*---------------------------------------------------------------------*
+*       FORM A01_SELECT_DATA                                          *
+*---------------------------------------------------------------------*
+FORM a01_select_data.
+
+  DATA: l_hold_vbeln     LIKE it_difot-vbeln,
+        l_hold_posnr     LIKE it_difot-posnr,
+        l_hold_wadat_ist LIKE it_difot-wadat_ist,
+        l_hold_etenr     LIKE it_difot-etenr,
+        l_matnr          TYPE matnr,
+        l_vkorg          TYPE vkorg,
+        l_vtweg          TYPE vtweg,
+        l_hold_werks     TYPE werks_d.
+  DATA: l_max_tol_data  LIKE zs002-data,
+        l_max_tol_days  TYPE i,
+        l_max_tol_plant TYPE werks_d.
+  DATA: lv_counter       TYPE i,
+        lv_line_t_total  TYPE i,
+        lv_dif_total     TYPE i,
+        lv_dif_o_total   TYPE i,
+        lv_dot_total     TYPE i,
+        lv_dot_o_total   TYPE i,
+        lv_difot_total   TYPE i,
+        lv_difot_o_total TYPE i.
+
+  DATA: BEGIN OF ls_pstyv,
+          pstyv TYPE pstyv,
+        END OF ls_pstyv,
+        lt_pstyv LIKE ls_pstyv OCCURS 0.
+  RANGES: lr_pstyv FOR vbap-pstyv.
+  DATA: BEGIN OF lt_shipping_point_calander OCCURS 0,
+          vstel TYPE vstel,
+          fabkl TYPE fabkl,
+        END OF lt_shipping_point_calander.
+  DATA: BEGIN OF ls_count1_data,
+          werks LIKE zs002-werks,
+          data  LIKE zs002-data,
+        END OF ls_count1_data,
+        lt_count1_data LIKE ls_count1_data OCCURS 0.
+
+* Special processing for extract to DW
+  IF p_dw_sp EQ abap_true.
+*  Ignore plant/DC selections
+    CLEAR: r_werks.  REFRESH: r_werks.
+    SELECT werks data
+        FROM zs002 INTO TABLE lt_count1_data
+       WHERE accky = 'DIFOT_BOM_COUNT1'.
+    IF sy-subrc NE 0.
+      EXIT.
+    ENDIF.
+    LOOP AT lt_count1_data INTO ls_count1_data.
+      MOVE 'EQ' TO r_werks-option.
+      MOVE 'I' TO r_werks-sign.
+      MOVE ls_count1_data-werks TO r_werks-low.
+      APPEND r_werks.
+    ENDLOOP.
+
+    CLEAR: s_vtweg.  REFRESH: s_vtweg.
+    SELECT vtweg
+      FROM tvkwz
+      INTO s_vtweg-low
+     WHERE werks IN r_werks.
+
+      MOVE 'EQ' TO s_vtweg-option.
+      MOVE 'I' TO s_vtweg-sign.
+      APPEND s_vtweg.
+    ENDSELECT.
+  ELSE.
+    SELECT werks data
+      FROM zs002 INTO TABLE lt_count1_data
+     WHERE werks IN r_werks
+       AND accky = 'DIFOT_BOM_COUNT1'.
+  ENDIF.
+
+* Retrieve the Sales Org for the selected Distribution Channe;
+  SELECT vkorg INTO r_vkorg-low FROM tvkov
+    WHERE vtweg IN s_vtweg.
+    r_vkorg-sign = 'I'.
+    r_vkorg-option = 'EQ'.
+    APPEND r_vkorg.
+  ENDSELECT.
+  SELECT vbeln erdat ernam vkorg vtweg kunnr bstnk FROM vbak
+    INTO TABLE it_vbak
+    WHERE vbeln IN s_vbeln
+      AND erdat IN s_erdat
+      AND ernam IN s_ernam
+      AND vbtyp EQ 'C'                   " Orders
+      AND vkorg IN r_vkorg
+      AND vtweg IN s_vtweg
+      AND kunnr IN s_kunnr
+      AND auart IN s_auart.
+  SORT it_vbak BY vbeln.
+  LOOP AT it_vbak.
+    v_tabix = sy-tabix.
+    AT NEW vbeln.
+      CLEAR: v_kunwe.
+      SELECT SINGLE kunnr FROM vbpa INTO v_kunwe
+        WHERE vbeln EQ it_vbak-vbeln
+          AND posnr EQ '0000000'
+          AND parvw EQ 'WE'                 " Ship-to SH
+          AND kunnr IN s_kunwe.
+      CLEAR: v_kunzr.
+      SELECT SINGLE kunnr FROM vbpa INTO v_kunzr
+        WHERE vbeln EQ it_vbak-vbeln
+          AND posnr EQ '0000000'
+          AND parvw EQ 'ZR'                 " Retailer ZR
+          AND kunnr IN s_kunzr.
+    ENDAT.
+    IF v_kunwe IS INITIAL.
+      DELETE it_vbak.
+      CONTINUE.
+    ENDIF.
+    IF v_kunzr IS INITIAL AND s_kunzr[] IS NOT INITIAL.
+      DELETE it_vbak.
+      CONTINUE.
+    ENDIF.
+    it_vbak-kunwe = v_kunwe.
+    it_vbak-kunzr = v_kunzr.
+    MODIFY it_vbak INDEX v_tabix.
+    CLEAR: it_vbap.
+    MOVE-CORRESPONDING it_vbak TO it_vbap.
+    SELECT * FROM vbap INTO CORRESPONDING FIELDS OF TABLE it_vbap_t
+      WHERE vbeln EQ it_vbak-vbeln
+        AND matnr IN s_matnr
+        AND werks IN r_werks.
+    LOOP AT it_vbap_t.
+*     Ignore items with different item cats when running in special
+*     handling mode.
+      IF p_dw_sp EQ abap_true.
+        IF it_vbap_t-werks NE ls_count1_data-werks.
+          READ TABLE lt_count1_data INTO ls_count1_data
+              WITH KEY werks = it_vbap_t-werks.
+        ENDIF.
+        IF ls_count1_data-data NS it_vbap_t-pstyv.
+          CONTINUE.
+        ENDIF.
+      ENDIF.
+      MOVE-CORRESPONDING it_vbap_t TO it_vbap.
+      APPEND it_vbap.
+    ENDLOOP.
+  ENDLOOP.
+
+  FREE: it_vbak, it_vbap_t.
+
+  IF NOT s_mtart[] IS INITIAL.
+    SORT it_vbap BY matnr.
+    CLEAR: l_matnr.
+    LOOP AT it_vbap.
+*      AT NEW matnr.
+      IF l_matnr NE it_vbap-matnr.
+        l_matnr = it_vbap-matnr.
+        CLEAR: v_mtart.
+        SELECT SINGLE mtart FROM mara INTO v_mtart
+          WHERE matnr EQ it_vbap-matnr
+            AND mtart IN s_mtart.
+      ENDIF.
+*      ENDAT.
+      CHECK v_mtart IS INITIAL.
+      DELETE it_vbap.
+    ENDLOOP.
+  ENDIF.
+  SORT it_vbap BY vkorg vtweg matnr.
+  CLEAR: l_matnr.
+  LOOP AT it_vbap.
+    v_tabix = sy-tabix.
+*    AT NEW matnr.
+    IF l_matnr NE it_vbap-matnr OR
+       l_vkorg NE it_vbap-vkorg OR
+       l_vtweg NE it_vbap-vtweg.
+      l_matnr = it_vbap-matnr.
+      l_vkorg = it_vbap-vkorg.
+      l_vtweg = it_vbap-vtweg.
+      CLEAR: v_mvgr5.
+      SELECT SINGLE mvgr5 FROM mvke INTO v_mvgr5
+        WHERE matnr EQ it_vbap-matnr
+          AND vkorg EQ it_vbap-vkorg
+          AND vtweg EQ it_vbap-vtweg
+          AND mvgr5 IN s_mvgr5.
+    ENDIF.
+*    ENDAT.
+
+    IF NOT s_mvgr5[] IS INITIAL AND v_mvgr5 IS INITIAL.
+      DELETE it_vbap INDEX v_tabix.
+    ELSE.
+      it_vbap-mvgr5 = v_mvgr5.
+      MODIFY it_vbap INDEX v_tabix.
+    ENDIF.
+  ENDLOOP.
+  SORT it_vbap BY vbeln posnr.
+  LOOP AT it_vbap.
+    CLEAR: it_vbep.
+    MOVE-CORRESPONDING it_vbap TO it_vbep.
+    SELECT etenr edatu wmeng wadat lmeng zz_wadat_org
+           zz_rcode zz_rc_cust zz_wmeng_org zz_vrkme_org
+           zz_rcode_qty zz_rc_cust_qty umvkz umvkn
+      FROM vbep
+      INTO (it_vbep-etenr, it_vbep-edatu, it_vbep-wmeng,
+            it_vbep-wadat, it_vbep-lmeng, it_vbep-zz_wadat_org,
+            it_vbep-zz_rcode, it_vbep-zz_rc_cust,
+            it_vbep-zz_wmeng_org, it_vbep-zz_vrkme_org,
+            it_vbep-zz_rcode_qty, it_vbep-zz_rc_cust_qty,
+            v_umvkz, v_umvkn)
+      WHERE vbeln EQ it_vbap-vbeln
+        AND posnr EQ it_vbap-posnr
+        AND edatu IN s_edatu
+        AND wmeng NE 0.
+
+*       Start SD1K997352 - Convert Sales Units to Base Units
+      IF v_umvkn NE 0.
+        it_vbep-lmeng = it_vbep-wmeng * ( v_umvkz / v_umvkn ).
+      ELSE.
+        it_vbep-lmeng = it_vbep-wmeng.
+      ENDIF.
+*       End SD1K997352
+
+      APPEND it_vbep.
+    ENDSELECT.
+
+  ENDLOOP.
+
+  FREE: it_vbap.
+
+* Get STO data
+  PERFORM a01_store_the_purchasing_data.  "Ins SD1K9A02UE
+
+  CLEAR: v_vbeln_d.
+  REFRESH: it_lips.
+
+* Get Delivery Data (non-STO)
+  LOOP AT it_vbep WHERE pur_order NE abap_true.
+    CLEAR: it_lips.
+    CLEAR: v_vbeln_d. "Ins SD1K997031
+    MOVE-CORRESPONDING it_vbep TO it_lips.
+    SELECT vbeln posnn FROM vbfa
+      INTO (it_lips-vbeln_d, it_lips-posnr_d)
+      WHERE vbelv EQ it_vbep-vbeln
+        AND posnv EQ it_vbep-posnr
+        AND vbtyp_n EQ 'J'.                        " Delivery
+      IF it_lips-vbeln_d NE v_vbeln_d.
+        CLEAR: v_wbstk.
+        SELECT SINGLE wbstk FROM vbuk INTO v_wbstk
+          WHERE vbeln EQ it_lips-vbeln_d.
+        SELECT SINGLE vstel
+                      wadat       "Ins SD1K996672
+                      wadat_ist
+          FROM likp
+          INTO (v_vstel, it_lips-wadat, v_wadat_ist)
+          WHERE vbeln EQ it_lips-vbeln_d.
+        IF v_wadat_ist IS INITIAL.
+          CLEAR: v_vbeln_d.
+        ENDIF.
+        CHECK NOT v_wadat_ist IS INITIAL.
+      ENDIF.
+      v_vbeln_d = it_lips-vbeln_d.
+      CHECK v_wbstk EQ 'C'.
+      it_lips-vstel = v_vstel.
+      it_lips-wadat_ist = v_wadat_ist.
+      SELECT SINGLE kcmeng lfimg umvkz umvkn vrkme zz_wadat
+        FROM lips
+        INTO (it_lips-lfmng, v_lfimg, v_umvkz, v_umvkn,
+              it_lips-vrkme_d, it_lips-zz_wadat)
+        WHERE vbeln EQ it_lips-vbeln_d
+          AND posnr EQ it_lips-posnr_d
+          AND uecha EQ 0.
+      CHECK sy-subrc EQ 0.
+      IF NOT v_lfimg IS INITIAL.
+        it_lips-lfimg = v_lfimg.
+        IF it_lips-lfmng IS INITIAL.
+          IF v_umvkn NE 0.
+            it_lips-lfmng = it_lips-lfimg * ( v_umvkz / v_umvkn ).
+          ELSE.
+            it_lips-lfmng = it_lips-lfimg.
+          ENDIF.
+        ENDIF.
+      ELSE.
+        IF v_umvkz NE 0.
+          it_lips-lfimg = it_lips-lfmng * ( v_umvkn / v_umvkz ).
+        ELSE.
+          it_lips-lfimg = it_lips-lfmng.
+        ENDIF.
+      ENDIF.
+      APPEND it_lips.
+    ENDSELECT.
+  ENDLOOP.
+
+* Start SD1K9A02UE
+* Get Delivery Data (STO)
+  LOOP AT it_vbep WHERE pur_order EQ abap_true.
+    CLEAR: it_lips.
+    CLEAR: v_vbeln_d. "Ins SD1K997031
+    MOVE-CORRESPONDING it_vbep TO it_lips.
+
+    SELECT belnr buzei
+      FROM ekbe
+      INTO (it_lips-vbeln_d, it_lips-posnr_d)
+      WHERE ebeln = it_vbep-vbeln
+        AND ebelp = it_vbep-posnr
+        AND vgabe EQ '8'.                        " Delivery
+
+      IF it_lips-vbeln_d NE v_vbeln_d.
+        SELECT SINGLE vstel
+                      wadat
+                      wadat_ist
+          FROM likp
+          INTO (v_vstel, it_lips-wadat, v_wadat_ist)
+         WHERE vbeln EQ it_lips-vbeln_d.
+        IF v_wadat_ist IS INITIAL.
+          CLEAR: v_vbeln_d.
+        ENDIF.
+        CHECK NOT v_wadat_ist IS INITIAL.
+      ENDIF.
+      v_vbeln_d = it_lips-vbeln_d.
+      it_lips-vstel = v_vstel.
+      it_lips-wadat_ist = v_wadat_ist.
+
+      SELECT SINGLE kcmeng lfimg umvkz umvkn vrkme zz_wadat
+        FROM lips
+        INTO (it_lips-lfmng, v_lfimg, v_umvkz, v_umvkn,
+              it_lips-vrkme_d, it_lips-zz_wadat)
+        WHERE vbeln EQ it_lips-vbeln_d
+          AND posnr EQ it_lips-posnr_d
+          AND uecha EQ 0.
+      CHECK sy-subrc EQ 0.
+      IF NOT v_lfimg IS INITIAL.
+        it_lips-lfimg = v_lfimg.
+        IF it_lips-lfmng IS INITIAL.
+          IF v_umvkn NE 0.
+            it_lips-lfmng = it_lips-lfimg * ( v_umvkz / v_umvkn ).
+          ELSE.
+            it_lips-lfmng = it_lips-lfimg.
+          ENDIF.
+        ENDIF.
+      ELSE.
+        IF v_umvkz NE 0.
+          it_lips-lfimg = it_lips-lfmng * ( v_umvkn / v_umvkz ).
+        ELSE.
+          it_lips-lfimg = it_lips-lfmng.
+        ENDIF.
+      ENDIF.
+      APPEND it_lips.
+    ENDSELECT.
+  ENDLOOP.
+* End SD1K9A02UE
+
+  SORT it_lips.
+  DELETE ADJACENT DUPLICATES FROM it_lips.
+
+* Start SD1K993079 - Delivery consolidator (per order)
+
+*    SORT it_lips BY vbeln posnr wadat_ist.
+*  SORT it_lips BY vbeln posnr vbeln_d.   "Del SD1K997352
+*  Sort order must be the same as the point where item specific
+*  quantities are summed.
+*  See text "clear item specific"
+  SORT it_lips BY vbeln posnr wadat_ist vbeln_d posnr_d. "Ins SD1K997352
+  CLEAR: v_lfmng, v_lfimg, v_reduce, v_vbeln_d, v_vbeln_h,
+         v_posnr_d, v_posnr_h.
+  LOOP AT it_lips.
+    CONCATENATE it_lips-vbeln it_lips-posnr
+           INTO it_lips-vbelnposnr.
+    MODIFY it_lips.
+  ENDLOOP.
+
+* Sum delivery quantities into _c fields
+  LOOP AT it_lips.
+    v_vbeln_h = it_lips-vbeln_d.
+    v_posnr_h = it_lips-posnr_d.
+    AT NEW vbelnposnr.
+      SUM.
+      v_lfimg = it_lips-lfimg.
+      v_lfmng = it_lips-lfmng.
+      v_vbeln_d = v_vbeln_h.
+      v_posnr_d = v_posnr_h.
+    ENDAT.
+    IF v_lfimg IS INITIAL AND v_lfmng IS INITIAL.
+      ADD 1 TO v_reduce.
+    ENDIF.
+    it_lips-lfimg_c = v_lfimg.
+    it_lips-lfmng_c = v_lfmng.
+    it_lips-vbeln_con = v_vbeln_d.
+    it_lips-posnr_con = v_posnr_d.
+    MODIFY it_lips.
+    CLEAR: v_lfimg, v_lfmng.
+  ENDLOOP.
+* End SD1K993079
+
+
+  REFRESH: it_difot.
+  SORT it_vbep BY vbeln posnr edatu.
+  SORT it_lips BY vbeln posnr wadat_ist.
+  LOOP AT it_vbep.
+*  Start SD1K997352 - Use WMENG for quantitiy calculations
+*   v_lfmng = it_vbep-lmeng.
+    v_lfmng = it_vbep-wmeng.
+* End SD1K997352
+    LOOP AT it_lips WHERE vbeln EQ it_vbep-vbeln
+                      AND posnr EQ it_vbep-posnr
+                      AND procd EQ ''.
+      v_tabix = sy-tabix.
+
+      v_lfimg = it_lips-lfmng_c.
+
+      IF v_lfimg LE v_lfmng OR
+         v_lfmng NE 0 AND v_lfimg GT v_lfmng.
+        CLEAR: it_difot.
+        MOVE-CORRESPONDING it_vbep TO it_difot.
+        MOVE-CORRESPONDING it_lips TO it_difot.
+*       Start SD1K993079 - Correct issue with BaseSchQty
+*        MOVE v_lfmng TO it_difot-lmeng.
+        it_difot-lmeng = it_vbep-lmeng.
+*       End SD1K993079
+*       Start SD1K996672 - Use WADAT from Delivery header
+*       only (LIKP-WADAT)
+*        IF NOT it_lips-zz_wadat IS INITIAL.
+*          MOVE it_lips-zz_wadat TO it_difot-wadat.
+*        ENDIF.
+*       End SD1K996672
+        it_difot-coltab[] = lt_coltab[].
+        APPEND it_difot.
+      ENDIF.
+      it_lips-procd = c_true.
+      MODIFY it_lips INDEX v_tabix.
+
+      SUBTRACT it_lips-lfmng_c FROM v_lfmng.
+
+      CHECK v_lfmng LE 0.
+
+*     Start SD1K993079 - Add remaining consolidated delivery lines
+*       Use vbeln_d for grouping when adding remaining lines
+      LOOP AT it_lips WHERE vbeln EQ it_vbep-vbeln
+                        AND posnr EQ it_vbep-posnr
+                        AND vbeln_con EQ it_difot-vbeln_d
+                        AND procd EQ ''
+                        AND lfmng_c EQ 0.
+        MOVE-CORRESPONDING it_lips TO it_difot.
+*         Update BaseSchQty
+        it_difot-lmeng = it_vbep-lmeng.
+        it_difot-coltab[] = lt_coltab[].
+        APPEND it_difot.
+      ENDLOOP.
+*     End SD1K993079
+      EXIT.
+    ENDLOOP.
+    IF sy-subrc NE 0.
+*     Start SD1K991986 - If flag is ticked, don't remove undelivered
+*                        rejected items.
+      IF p_incund IS INITIAL.
+        CHECK it_vbep-abgru IS INITIAL.
+      ENDIF.
+*     End SD1K991986
+      CLEAR: it_difot.
+      MOVE-CORRESPONDING it_vbep TO it_difot.
+      it_difot-coltab[] = lt_coltab[].
+      APPEND it_difot.
+    ENDIF.
+  ENDLOOP.
+
+  FREE: it_lips, it_vbep.
+
+* Start SD1K993079 - Calculate Delivery % and clear item specific
+*                    summed fields.
+  CLEAR: l_hold_vbeln, l_hold_posnr, l_hold_etenr.
+  SORT it_difot BY vbeln posnr wadat_ist vbeln_d posnr_d.
+  LOOP AT it_difot.
+
+*   Calculate delivery % (option 2)
+*   Start SD1K997352 - Use WMENG for quantitiy calculations
+*    IF NOT it_difot-lmeng IS INITIAL.
+*      it_difot-lfmng_c_p = ( it_difot-lfmng / it_difot-lmeng )
+*                           * 100.
+*    ENDIF.
+    IF NOT it_difot-wmeng IS INITIAL.
+      it_difot-lfmng_c_p = ( it_difot-lfimg / it_difot-wmeng )
+                           * 100.
+    ENDIF.
+*   End SD1K997352 - Use WMENG for quantitiy calculations
+
+*   Check if sales order/item has changed
+    IF l_hold_vbeln NE it_difot-vbeln OR
+       l_hold_posnr NE it_difot-posnr.
+      l_hold_vbeln = it_difot-vbeln.
+      l_hold_posnr = it_difot-posnr.
+      l_hold_etenr = it_difot-etenr.
+    ELSE.
+
+*     Check if schedule line has changed
+      IF l_hold_etenr NE it_difot-etenr.
+        l_hold_etenr = it_difot-etenr.
+      ELSE.
+
+*       Clear schedule line quantities and units.
+        CLEAR: it_difot-lmeng,     "Sched Line Qty - Base Unit
+               it_difot-wmeng.     "Sched Line Qty
+      ENDIF.
+
+*     Clear sales order item quantities and units.
+      CLEAR: it_difot-kwmeng,    "Item Quantity
+             it_difot-klmeng.    "Item Qty - Base Unit
+
+    ENDIF.
+    MODIFY it_difot.
+
+  ENDLOOP.
+* End SD1K993079
+
+  CLEAR: it_difot_delivery_dates.
+  REFRESH: it_difot_delivery_dates.
+
+
+  SORT it_difot BY vbeln posnr wadat_ist.
+
+  LOOP AT it_difot.
+    v_tabix = sy-tabix.
+
+*   Get additional descriptions, etc.
+*   Not required for special processing
+    IF p_dw_sp NE abap_true.
+*     Store the order, item and schedule line as one field
+      IF it_difot-pur_order NE abap_true.
+        CONCATENATE it_difot-vbeln+2(8)  '/'
+                    it_difot-posnr+2(4)  '/'
+                    it_difot-etenr+1(3)
+               INTO it_difot-order_item_sch_sl.
+        SHIFT it_difot-order_item_sch_sl LEFT
+              DELETING LEADING '0'.
+        SHIFT it_difot-order_item_sch_sl RIGHT
+              DELETING TRAILING space.
+      ELSE.
+        CONCATENATE it_difot-vbeln '/'
+                    it_difot-posnr+2(4)
+               INTO it_difot-order_item_sch_sl.
+      ENDIF.
+
+      READ TABLE it_kunnr WITH KEY kunnr = it_difot-kunnr.
+      IF sy-subrc NE 0.
+        CLEAR: it_kunnr.
+        SELECT SINGLE kunnr name1 FROM kna1
+          INTO (it_kunnr-kunnr, it_kunnr-name1)
+          WHERE kunnr EQ it_difot-kunnr.
+        APPEND it_kunnr.
+      ENDIF.
+      READ TABLE it_kunwe WITH KEY kunwe = it_difot-kunwe.
+      IF sy-subrc NE 0.
+        CLEAR: it_kunwe.
+        SELECT SINGLE kunnr name1 FROM kna1
+          INTO (it_kunwe-kunwe, it_kunwe-name1)
+          WHERE kunnr EQ it_difot-kunwe.
+        APPEND it_kunwe.
+      ENDIF.
+      CLEAR: it_kunzr.
+      IF it_difot-kunzr IS NOT INITIAL.
+        READ TABLE it_kunzr WITH KEY kunzr = it_difot-kunzr.
+        IF sy-subrc NE 0.
+          SELECT SINGLE kunnr name1 FROM kna1
+            INTO (it_kunzr-kunzr, it_kunzr-namer)
+            WHERE kunnr EQ it_difot-kunzr.
+          APPEND it_kunzr.
+        ENDIF.
+      ENDIF.
+      READ TABLE it_makt WITH KEY matnr = it_difot-matnr.
+      IF sy-subrc NE 0.
+        CLEAR: it_makt.
+        SELECT SINGLE matnr maktx FROM makt
+          INTO (it_makt-matnr, it_makt-maktx)
+          WHERE matnr EQ it_difot-matnr.
+        APPEND it_makt.
+      ENDIF.
+    ENDIF.
+
+*   Start SD1K995353 - If RC code is initial, and this is a lower
+*                      level item, and there has been a date
+*                      change, check higher level item for RC code
+    IF it_difot-zz_rcode IS INITIAL AND
+       NOT it_difot-uepos IS INITIAL AND
+       ( it_difot-wadat NE it_difot-zz_wadat_org ).
+
+      SELECT SINGLE zz_rcode zz_rc_cust
+        FROM vbep
+        INTO (it_difot-zz_rcode, it_difot-zz_rc_cust)
+       WHERE vbeln = it_difot-vbeln
+         AND posnr = it_difot-uepos
+         AND etenr = it_difot-etenr.
+
+    ENDIF.
+*   End SD1K995353
+
+*   Get RC text for Date change
+    IF NOT it_difot-zz_rcode IS INITIAL.    "Ins SD1K994923
+      READ TABLE it_rtext WITH KEY zz_rcode = it_difot-zz_rcode.
+      IF sy-subrc NE 0.
+        CLEAR: it_rtext.
+        SELECT SINGLE rcode rtext FROM zdifot_rc
+          INTO (it_rtext-zz_rcode, it_rtext-rtext)
+          WHERE rcode EQ it_difot-zz_rcode.
+        APPEND it_rtext.
+      ENDIF.
+      it_difot-rtext = it_rtext-rtext.  "Ins SD1K994923
+    ENDIF.   "Ins SD1K994923
+
+*   Start SD1K995320 - If RC code is initial, and this is a lower
+*                      level item, and there has been a quantity
+*                      change, check higher level item for RC code
+    IF it_difot-zz_rcode_qty IS INITIAL AND
+       NOT it_difot-uepos IS INITIAL AND
+*     Start SD1K997352 - Use WMENG for quantitiy calculations
+*       ( it_difot-lmeng NE it_difot-zz_wmeng_org OR
+*         it_difot-meins NE it_difot-zz_vrkme_org ).
+       ( it_difot-wmeng NE it_difot-zz_wmeng_org OR
+         it_difot-vrkme NE it_difot-zz_vrkme_org ).
+*     End SD1K997352
+      SELECT SINGLE zz_rcode_qty zz_rc_cust_qty
+        FROM vbep
+        INTO (it_difot-zz_rcode_qty, it_difot-zz_rc_cust_qty)
+       WHERE vbeln = it_difot-vbeln
+         AND posnr = it_difot-uepos
+         AND etenr = it_difot-etenr.
+
+    ENDIF.
+*   End SD1K995320
+
+*   Start SD1K994923 - Get RC text for Quantity change
+    IF NOT it_difot-zz_rcode_qty IS INITIAL.
+      READ TABLE it_rtext WITH KEY zz_rcode = it_difot-zz_rcode_qty.
+      IF sy-subrc NE 0.
+        CLEAR: it_rtext.
+        SELECT SINGLE rcode rtext FROM zdifot_rc
+          INTO (it_rtext-zz_rcode, it_rtext-rtext)
+          WHERE rcode EQ it_difot-zz_rcode_qty.
+        APPEND it_rtext.
+      ENDIF.
+      it_difot-rtext_qty = it_rtext-rtext.
+    ENDIF.
+*   End SD1K994923
+
+    READ TABLE it_told WITH KEY kunnr = it_difot-kunnr
+                                vkorg = it_difot-vkorg
+                                vtweg = it_difot-vtweg.
+    IF sy-subrc NE 0.
+      CLEAR: it_told.
+      SELECT SINGLE kunnr vkorg vtweg kvgr2 kvgr3 FROM knvv
+        INTO (it_told-kunnr, it_told-vkorg, it_told-vtweg,
+              it_told-ztoldm, it_told-ztoldp)
+        WHERE kunnr EQ it_difot-kunnr
+          AND vkorg EQ it_difot-vkorg
+          AND vtweg EQ it_difot-vtweg
+          AND spart EQ '20'
+          AND loevm EQ ''.
+      APPEND it_told.
+    ENDIF.
+    READ TABLE it_prodh WITH KEY matnr = it_difot-matnr
+                                 vkorg = it_difot-vkorg
+                                 vtweg = it_difot-vtweg.
+    IF sy-subrc NE 0.
+      CLEAR: it_prodh.
+      SELECT SINGLE matnr vkorg vtweg prodh FROM mvke
+        INTO (it_prodh-matnr, it_prodh-vkorg, it_prodh-vtweg,
+              it_prodh-prodh)
+        WHERE matnr EQ it_difot-matnr
+          AND vkorg EQ it_difot-vkorg
+          AND vtweg EQ it_difot-vtweg
+          AND lvorm EQ ''.
+      APPEND it_prodh.
+    ENDIF.
+    IF NOT it_difot-matnr IS INITIAL.
+      READ TABLE it_tolq WITH KEY werks = it_difot-werks
+                                  kunnr = it_difot-kunnr
+                                  prodhier = ''
+                                  matnr = it_difot-matnr.
+    ELSE.
+      READ TABLE it_tolq WITH KEY werks = it_difot-werks
+                                  kunnr = it_difot-kunnr
+                                  prodhier = it_prodh-prodh
+                                  matnr = ''.
+    ENDIF.
+    IF sy-subrc NE 0.
+      READ TABLE it_tolq WITH KEY werks = it_difot-werks
+                                  kunnr = it_difot-kunnr
+                                  prodhier = ''
+                                  matnr = ''.
+      IF sy-subrc NE 0.
+        READ TABLE it_tolq WITH KEY werks = it_difot-werks
+                                    kunnr = ''
+                                    prodhier = ''
+                                    matnr = ''.
+      ENDIF.
+    ENDIF.
+    IF sy-subrc NE 0.
+      CLEAR: it_tolq.
+      IF NOT it_difot-matnr IS INITIAL.
+        SELECT SINGLE werks kunnr prodhier matnr ztolqp ztolqm
+          FROM zdifot_tol
+          INTO (it_tolq-werks, it_tolq-kunnr, it_tolq-prodhier,
+                it_tolq-matnr, it_tolq-ztolqp, it_tolq-ztolqm)
+          WHERE werks EQ it_difot-werks
+            AND kunnr EQ it_difot-kunnr
+            AND prodhier EQ ''
+            AND matnr EQ it_difot-matnr.
+      ELSE.
+        SELECT SINGLE werks kunnr prodhier matnr ztolqp ztolqm
+          FROM zdifot_tol
+          INTO (it_tolq-werks, it_tolq-kunnr, it_tolq-prodhier,
+                it_tolq-matnr, it_tolq-ztolqp, it_tolq-ztolqm)
+          WHERE werks EQ it_difot-werks
+            AND kunnr EQ it_difot-kunnr
+            AND prodhier EQ it_prodh-prodh
+            AND matnr EQ ''.
+      ENDIF.
+      IF sy-subrc NE 0.
+        SELECT SINGLE werks kunnr prodhier matnr ztolqp ztolqm
+          FROM zdifot_tol
+          INTO (it_tolq-werks, it_tolq-kunnr, it_tolq-prodhier,
+                it_tolq-matnr, it_tolq-ztolqp, it_tolq-ztolqm)
+          WHERE werks EQ it_difot-werks
+            AND kunnr EQ it_difot-kunnr
+            AND prodhier EQ ''
+            AND matnr EQ ''.
+        IF sy-subrc NE 0.
+          SELECT SINGLE werks kunnr prodhier matnr ztolqp ztolqm
+            FROM zdifot_tol
+            INTO (it_tolq-werks, it_tolq-kunnr, it_tolq-prodhier,
+                  it_tolq-matnr, it_tolq-ztolqp, it_tolq-ztolqm)
+            WHERE werks EQ it_difot-werks
+              AND kunnr EQ ''
+              AND prodhier EQ ''
+              AND matnr EQ ''.
+          IF sy-subrc NE 0.
+            it_tolq-werks = it_difot-werks.
+            it_tolq-kunnr = it_difot-kunnr.
+            it_tolq-prodhier = it_prodh-prodh.
+            it_tolq-matnr = it_difot-matnr.
+            it_tolq-ztolqp = 0.
+            it_tolq-ztolqm = 0.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+      APPEND it_tolq.
+    ENDIF.
+
+*   Start SD1K996672 - Check if work days should be excluded from
+*                      tolerence
+    IF l_max_tol_plant NE it_difot-werks.
+      l_max_tol_plant = it_difot-werks.
+      SELECT SINGLE data
+        FROM zs002
+        INTO l_max_tol_data
+       WHERE werks = it_difot-werks
+         AND vtweg = space
+         AND accky = 'DIFOTMAXTOLDAYS'.
+
+      IF sy-subrc NE 0.
+        SELECT SINGLE data
+          FROM zs002
+          INTO l_max_tol_data
+         WHERE werks = space
+           AND vtweg = space
+           AND accky = 'DIFOTMAXTOLDAYS'.
+
+        IF sy-subrc NE 0.
+          CLEAR: l_max_tol_data.
+        ENDIF.
+      ENDIF.
+      l_max_tol_days = l_max_tol_data.
+    ENDIF.
+
+*   Get shipping point calendar
+    IF lt_shipping_point_calander-vstel NE it_difot-vstel.
+
+      READ TABLE lt_shipping_point_calander
+        WITH KEY vstel = it_difot-vstel.
+      IF sy-subrc NE 0.
+        SELECT SINGLE vstel fabkl
+          FROM tvst
+          INTO (lt_shipping_point_calander-vstel,
+                lt_shipping_point_calander-fabkl)
+         WHERE vstel = it_difot-vstel.
+
+        IF sy-subrc EQ 0.
+          APPEND lt_shipping_point_calander.
+        ELSE.
+          CLEAR: lt_shipping_point_calander.
+
+        ENDIF.
+      ENDIF.
+    ENDIF.
+*   End SD1K996672
+
+    it_difot-name1 = it_kunnr-name1.
+    it_difot-name2 = it_kunwe-name1.
+    it_difot-namer = it_kunzr-namer.
+    it_difot-maktx = it_makt-maktx.
+*    it_difot-rtext = it_rtext-rtext.   "Del SD1K994923
+    it_difot-ztoldp = it_told-ztoldp.
+    it_difot-ztoldm = it_told-ztoldm.
+    it_difot-ztolqp = it_tolq-ztolqp.
+    it_difot-ztolqm = it_tolq-ztolqm.
+
+*   If undelivered and not yet late, remove from report
+    IF it_difot-vbeln_d IS INITIAL.
+
+      PERFORM calculate_early_or_late_date
+        USING 'LATE'
+              it_difot-wadat
+              it_difot-ztoldp
+              l_max_tol_days
+              lt_shipping_point_calander-fabkl
+     CHANGING v_date_late.
+
+      IF v_date_late > sy-datum.
+        DELETE it_difot.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+
+
+    IF it_difot-zz_wadat_org IS INITIAL.
+
+      it_difot-zz_wadat_org = it_difot-wadat.
+
+*     Use same values for calculation
+      it_difot-zz_wadat_org_calc = it_difot-zz_wadat_org.
+
+*   If customer initiated change, use current values in calculation
+    ELSEIF NOT it_difot-zz_rc_cust IS INITIAL.
+      it_difot-zz_wadat_org_calc = it_difot-wadat.
+
+*   If customer did not initiate change, use same values in
+*   calculation
+    ELSEIF it_difot-zz_rc_cust IS INITIAL.
+      it_difot-zz_wadat_org_calc = it_difot-zz_wadat_org.
+    ENDIF.
+
+
+*   Start SD1K994923 - Get Original Qty and UoM details
+*   Start SD1K997352 - Use WMENG for quantitiy calculations
+**   Only get values if LMENG is populated (ie. first delivery line)
+*    IF NOT it_difot-lmeng IS INITIAL.
+*   Only get values if WMENG is populated (ie. first delivery line)
+    IF NOT it_difot-wmeng IS INITIAL.
+*   End SD1K997352
+      IF it_difot-zz_wmeng_org IS INITIAL.
+*        CLEAR: v_tabkey, v_value.
+*        CONCATENATE sy-mandt it_difot-vbeln it_difot-posnr '0001'
+*          INTO v_tabkey.
+*        SELECT SINGLE value_old FROM cdpos INTO v_value
+*          WHERE objectclas EQ 'VERKBELEG'
+*            AND objectid EQ it_difot-vbeln
+*            AND tabname EQ 'VBEP'
+*            AND tabkey EQ v_tabkey
+*            AND fname EQ 'WMENG'
+*            AND chngind EQ 'U'.
+*        IF sy-subrc NE 0.
+        it_difot-zz_wmeng_org = it_difot-wmeng.
+*        ELSE.
+*          MOVE v_value TO it_difot-zz_wmeng_org.
+*        ENDIF.
+
+*        CLEAR: v_tabkey, v_value.
+*        CONCATENATE sy-mandt it_difot-vbeln it_difot-posnr '0001'
+*          INTO v_tabkey.
+*        SELECT SINGLE value_old FROM cdpos INTO v_value
+*          WHERE objectclas EQ 'VERKBELEG'
+*            AND objectid EQ it_difot-vbeln
+*            AND tabname EQ 'VBEP'
+*            AND tabkey EQ v_tabkey
+*            AND fname EQ 'VRKME'
+*            AND chngind EQ 'U'.
+*        IF sy-subrc NE 0.
+        it_difot-zz_vrkme_org = it_difot-vrkme.
+*        ELSE.
+*          MOVE v_value TO it_difot-zz_vrkme_org.
+*        ENDIF.
+
+        IF v_legacy_qty_reason EQ c_own_reason.
+*         Use same values for calculation (own reason)
+          it_difot-zz_wmeng_org_calc = it_difot-zz_wmeng_org.
+          it_difot-zz_vrkme_org_calc = it_difot-zz_vrkme_org.
+        ELSE.
+*         Use current values for calculation (customer reason)
+*         Start SD1K997352 - Use WMENG for quantitiy calculations
+*          it_difot-zz_wmeng_org_calc = it_difot-lmeng.
+*          it_difot-zz_vrkme_org_calc = it_difot-meins.
+          it_difot-zz_wmeng_org_calc = it_difot-wmeng.
+          it_difot-zz_vrkme_org_calc = it_difot-vrkme.
+*         End SD1K997352
+        ENDIF.
+
+
+*     If customer initiated change, use current values in calculation
+      ELSEIF NOT it_difot-zz_rc_cust_qty IS INITIAL.
+*       Start SD1K997352 - Use WMENG for quantitiy calculations
+*        it_difot-zz_wmeng_org_calc = it_difot-lmeng.
+*        it_difot-zz_vrkme_org_calc = it_difot-meins.
+        it_difot-zz_wmeng_org_calc = it_difot-wmeng.
+        it_difot-zz_vrkme_org_calc = it_difot-vrkme.
+*       End SD1K997352
+
+*     If customer did not initiate change, use same values
+*     in calculation
+      ELSEIF it_difot-zz_rc_cust_qty IS INITIAL.
+        it_difot-zz_wmeng_org_calc = it_difot-zz_wmeng_org.
+        it_difot-zz_vrkme_org_calc = it_difot-zz_vrkme_org.
+
+      ENDIF.
+
+    ELSE.
+      CLEAR: it_difot-zz_wmeng_org, it_difot-zz_wmeng_org_calc,
+             it_difot-zz_vrkme_org, it_difot-zz_vrkme_org_calc.
+    ENDIF.
+*   End SD1K994923
+
+*   Start SD1K993079 - Check if new cons del
+*     Comment - set hold variable
+*             - if new consolidated delivery, clear DI
+*               totals,
+*             - modify and continue.
+    IF it_difot-vbeln_d NE it_difot-vbeln_con OR
+       it_difot-posnr_d NE it_difot-posnr_con.
+      CLEAR: it_difot-dif, it_difot-dif_o, it_difot-dot,
+        it_difot-difot, it_difot-dot_o, it_difot-difot_o.
+
+      MODIFY it_difot INDEX v_tabix.
+
+    ELSE.
+*     Set Total line numbers
+      it_difot-line_t = 1.
+    ENDIF.
+*   End SD1K993079
+
+*   Store Delivery dates for DOT specific loop
+    MOVE-CORRESPONDING it_difot TO it_difot_delivery_dates.
+    APPEND it_difot_delivery_dates.
+
+    MODIFY it_difot INDEX v_tabix.
+
+  ENDLOOP.
+
+
+  LOOP AT it_difot WHERE line_t = 1.
+    v_tabix = sy-tabix.
+    v_hold_wmeng = it_difot-wmeng.
+
+*   If not yet Delivered
+    IF it_difot-wadat_ist IS INITIAL.
+      it_difot-dif = it_difot-dot = it_difot-difot = it_difot-dot_o =
+      it_difot-difot_o = 0.
+      it_difot-lfmng_c_p = 0.   "Ins SD1K993079
+    ELSE.
+
+***** Calculate DIF (Without change reason logic/revised)
+*     Start SD1K9A02DK - Convert delivered qty
+*     Convert Qty in Sales UOM to Report UoM (Base UOM)
+*     KH: Code further down to set it back, as WMENG is
+*     Sched Line Qty and should be in document UOM.
+      IF it_difot-meins NE it_difot-vrkme.
+
+        CALL FUNCTION 'Z_UNIT_OF_MEASURE_CONVERSION'
+          EXPORTING
+            matnr              = it_difot-matnr
+            unit_old           = it_difot-vrkme
+            value_old          = it_difot-wmeng
+            unit_new           = it_difot-meins
+          IMPORTING
+            value_new          = it_difot-wmeng
+          EXCEPTIONS
+            material_not_exist = 1
+            unit_old_not_exist = 2
+            unit_new_not_exist = 3
+            OTHERS             = 4.
+
+      ENDIF.
+*     End SD1K9A02DK
+
+*     Start SD1K997352 - Use WMENG for quantitiy calculations
+*      v_under_qty = ( 1 - ( it_difot-ztolqm / 100 ) ) * it_difot-lmeng.
+*      v_over_qty = ( 1 + ( it_difot-ztolqp / 100 ) ) * it_difot-lmeng.
+      v_under_qty = ( 1 - ( it_difot-ztolqm / 100 ) ) * it_difot-wmeng.
+      v_over_qty = ( 1 + ( it_difot-ztolqp / 100 ) ) * it_difot-wmeng.
+*     End SD1K997352
+
+      IF it_difot-lfmng_c GE v_under_qty AND
+         it_difot-lfmng_c LE v_over_qty.
+        it_difot-dif = 1.
+      ELSE.
+        it_difot-dif = 0.
+      ENDIF.
+
+***** Calculate DIF (Using change reason logic)
+
+*     Convert Original Qty to Report UoM (Base UOM)
+*      IF it_difot-meins NE it_difot-zz_vrkme_org.     "Del SD1K9A02DK
+      IF it_difot-meins NE it_difot-zz_vrkme_org_calc. "Ins SD1K9A02DK
+        CALL FUNCTION 'Z_UNIT_OF_MEASURE_CONVERSION'
+          EXPORTING
+            matnr              = it_difot-matnr
+            unit_old           = it_difot-zz_vrkme_org_calc
+            value_old          = it_difot-zz_wmeng_org_calc
+            unit_new           = it_difot-meins
+          IMPORTING
+            value_new          = it_difot-zz_wmeng_org_calc
+          EXCEPTIONS
+            material_not_exist = 1
+            unit_old_not_exist = 2
+            unit_new_not_exist = 3
+            OTHERS             = 4.
+
+        it_difot-zz_vrkme_org_calc = it_difot-meins.
+      ENDIF.
+
+      v_under_qty = ( 1 - ( it_difot-ztolqm / 100 ) )
+                    * it_difot-zz_wmeng_org_calc.
+      v_over_qty = ( 1 + ( it_difot-ztolqp / 100 ) )
+                   * it_difot-zz_wmeng_org_calc.
+      IF it_difot-lfmng_c GE v_under_qty AND
+         it_difot-lfmng_c LE v_over_qty.
+        it_difot-dif_o = 1.
+      ELSE.
+        it_difot-dif_o = 0.
+      ENDIF.
+
+***** Calculate DOT - Must be done in a loop on previously gathered
+*                     data as each delivery line must be checked,
+*                     not just the a consolidated line as for
+*                     quantities (SD1K996991)
+
+*     Default to pass.
+      it_difot-dot_o = 1.
+      it_difot-dot = 1.
+
+      LOOP AT it_difot_delivery_dates WHERE vbeln = it_difot-vbeln
+                                        AND posnr = it_difot-posnr.
+
+***** Calculate DOT (Using change reason logic)
+*       Early and late dates based on calander
+        PERFORM calculate_early_or_late_date
+          USING 'EARLY'
+                it_difot_delivery_dates-zz_wadat_org_calc
+                it_difot_delivery_dates-ztoldm
+                l_max_tol_days
+                lt_shipping_point_calander-fabkl
+       CHANGING v_date_early.
+
+        PERFORM calculate_early_or_late_date
+          USING 'LATE'
+                it_difot_delivery_dates-zz_wadat_org_calc
+                it_difot_delivery_dates-ztoldp
+                l_max_tol_days
+                lt_shipping_point_calander-fabkl
+       CHANGING v_date_late.
+
+        IF it_difot_delivery_dates-wadat_ist GE v_date_early AND
+           it_difot_delivery_dates-wadat_ist LE v_date_late.
+*         No action (defaulted to pass)
+        ELSE.
+          it_difot-dot_o = 0.
+        ENDIF.
+
+
+*****   Calculate DOT (Without change reason logic/revised)
+        IF it_difot_delivery_dates-wadat NE
+           it_difot_delivery_dates-zz_wadat_org_calc.
+*         Early and late dates based on calander
+          PERFORM calculate_early_or_late_date
+            USING 'EARLY'
+                  it_difot_delivery_dates-wadat
+                  it_difot_delivery_dates-ztoldm
+                  l_max_tol_days
+                  lt_shipping_point_calander-fabkl
+         CHANGING v_date_early.
+
+          PERFORM calculate_early_or_late_date
+            USING 'LATE'
+                  it_difot_delivery_dates-wadat
+                  it_difot_delivery_dates-ztoldp
+                  l_max_tol_days
+                  lt_shipping_point_calander-fabkl
+         CHANGING v_date_late.
+
+          IF it_difot_delivery_dates-wadat_ist GE v_date_early AND
+             it_difot_delivery_dates-wadat_ist LE v_date_late.
+*           No action (defaulted to pass)
+          ELSE.
+            it_difot-dot = 0.
+          ENDIF.
+
+        ELSE.
+*         Dates match. Use already calculated result if failed.
+          IF it_difot-dot_o = 0.
+            it_difot-dot = it_difot-dot_o.
+          ENDIF.
+        ENDIF.
+
+*       Can exist checks if both DOT checks have already failed
+        IF it_difot-dot_o = 0 AND it_difot-dot = 0.
+          EXIT.
+        ENDIF.
+
+      ENDLOOP.
+
+***** Calculate DIFOT (Using change reason logic)
+      IF it_difot-dif_o EQ 0 OR it_difot-dot_o EQ 0.
+        it_difot-difot_o = 0.
+      ELSE.
+        it_difot-difot_o = 1.
+      ENDIF.
+
+
+***** Calculate DIFOT (Without change reason logic/revised)
+      IF it_difot-dif EQ 0 OR it_difot-dot EQ 0.
+        it_difot-difot = 0.
+      ELSE.
+        it_difot-difot = 1.
+      ENDIF.
+
+    ENDIF.
+
+    IF v_hold_wmeng NE it_difot-wmeng.
+      it_difot-wmeng = v_hold_wmeng.
+    ENDIF.
+
+    MODIFY it_difot INDEX v_tabix.
+  ENDLOOP.
+
+  DELETE it_difot WHERE NOT wadat_ist IN s_wadat.
+
+* For BOM child entries for certain sites, only score once per
+* high level item.
+  IF NOT lt_count1_data[] IS INITIAL.
+    SORT it_difot BY vbeln uepos posnr.
+    it_difot_t[] = it_difot[].
+
+    CLEAR: l_hold_vbeln, l_hold_posnr, l_hold_werks.
+    LOOP AT it_difot WHERE line_t = 1
+                      AND NOT uepos IS INITIAL.
+
+*     Set up item type range, which can change per plant
+      IF NOT l_hold_werks = it_difot-werks.
+        l_hold_werks = it_difot-werks.
+        REFRESH: lt_pstyv, lr_pstyv.
+        READ TABLE lt_count1_data INTO ls_count1_data
+           WITH KEY werks = l_hold_werks.
+        IF sy-subrc EQ 0.
+          SPLIT ls_count1_data-data AT ',' INTO TABLE lt_pstyv
+             IN CHARACTER MODE.
+          LOOP AT lt_pstyv INTO ls_pstyv.
+            lr_pstyv-sign = 'I'.
+            lr_pstyv-option = 'EQ'.
+            lr_pstyv-low = ls_pstyv-pstyv.
+            APPEND lr_pstyv.
+          ENDLOOP.
+        ENDIF.
+      ENDIF.
+
+      CHECK NOT lr_pstyv[] IS INITIAL.
+      CHECK it_difot-pstyv IN lr_pstyv.
+
+*     Only do once per set of lower level items
+      IF NOT l_hold_vbeln = it_difot-vbeln OR
+         NOT l_hold_posnr = it_difot-uepos.
+
+        l_hold_vbeln = it_difot-vbeln.
+        l_hold_posnr = it_difot-uepos.
+        CLEAR: lv_line_t_total,
+               lv_dif_total, lv_dif_o_total,
+               lv_dot_total, lv_dot_o_total,
+               lv_difot_total, lv_difot_o_total.
+
+*       Sum total and each for for all BOM items
+        LOOP AT it_difot_t WHERE vbeln = it_difot-vbeln
+                             AND uepos = it_difot-uepos
+                             AND line_t = 1.
+          lv_line_t_total = lv_line_t_total + 1.
+          lv_dif_total = lv_dif_total + it_difot_t-dif.
+          lv_dif_o_total = lv_dif_o_total + it_difot_t-dif_o.
+
+          lv_dot_total = lv_dot_total + it_difot_t-dot.
+          lv_dot_o_total = lv_dot_o_total + it_difot_t-dot_o.
+
+          lv_difot_total = lv_difot_total + it_difot_t-difot.
+          lv_difot_o_total = lv_difot_o_total + it_difot_t-difot_o.
+
+        ENDLOOP.
+
+*       Set score for whole line, and apply to the first line,
+*       clearing scores for all other lines.  This will be the high
+*       level item if included (as it appears first due to sort order)
+*       or the first component if excluded by material type.
+        CLEAR: lv_counter.
+        LOOP AT it_difot_t WHERE vbeln = it_difot-vbeln
+                             AND ( uepos = it_difot-uepos OR
+                                   posnr = it_difot-uepos )
+                             AND line_t = 1.
+          v_tabix = sy-tabix.
+          lv_counter = lv_counter + 1.
+          IF lv_counter = 1.
+            IF lv_dif_total = lv_line_t_total.
+              it_difot_t-dif = 1.
+            ELSE.
+              it_difot_t-dif = 0.
+            ENDIF.
+            IF lv_dif_o_total = lv_line_t_total.
+              it_difot_t-dif_o = 1.
+            ELSE.
+              it_difot_t-dif_o = 0.
+            ENDIF.
+
+            IF lv_dot_total = lv_line_t_total.
+              it_difot_t-dot = 1.
+            ELSE.
+              it_difot_t-dot = 0.
+            ENDIF.
+            IF lv_dot_o_total = lv_line_t_total.
+              it_difot_t-dot_o = 1.
+            ELSE.
+              it_difot_t-dot_o = 0.
+            ENDIF.
+
+            IF lv_difot_total = lv_line_t_total.
+              it_difot_t-difot = 1.
+            ELSE.
+              it_difot_t-difot = 0.
+            ENDIF.
+
+            IF lv_difot_o_total = lv_line_t_total.
+              it_difot_t-difot_o = 1.
+            ELSE.
+              it_difot_t-difot_o = 0.
+            ENDIF.
+
+          ELSE.
+*           Clear scores for all other lines
+            CLEAR: it_difot_t-line_t,
+                   it_difot_t-dif, it_difot_t-dif_o,
+                   it_difot_t-dot, it_difot_t-dot_o,
+                   it_difot_t-difot, it_difot_t-difot_o.
+          ENDIF.
+
+          MODIFY it_difot_t INDEX v_tabix.
+
+        ENDLOOP.
+      ENDIF.
+    ENDLOOP.
+
+    it_difot[] = it_difot_t[].
+    FREE it_difot_t.
+
+    IF p_dw_sp NE abap_true.
+      SORT it_difot BY vbeln posnr wadat_ist.
+    ELSE.
+
+*     Special sort to make sure the total line is on top
+      SORT it_difot BY vbeln posnr line_t DESCENDING.
+
+      DELETE FROM zdw_zs103_sp.
+      DATA: st_zs103_sp LIKE zdw_zs103_sp,
+            it_zs103_sp LIKE st_zs103_sp OCCURS 0.
+      CLEAR: l_hold_vbeln, l_hold_posnr.
+      LOOP AT it_difot.
+*       Can be multiple lines per order.  Only take 1.
+        IF l_hold_vbeln = it_difot-vbeln AND
+           l_hold_posnr = it_difot-posnr.
+          CONTINUE.
+        ELSE.
+          l_hold_vbeln = it_difot-vbeln.
+          l_hold_posnr = it_difot-posnr.
+        ENDIF.
+        CLEAR: st_zs103_sp.
+        st_zs103_sp-vbeln = it_difot-vbeln.
+        st_zs103_sp-posnr = it_difot-posnr.
+        st_zs103_sp-werks = it_difot-werks.
+        IF it_difot-line_t = 1.
+          st_zs103_sp-dif = it_difot-dif.
+          st_zs103_sp-dot = it_difot-dot.
+          st_zs103_sp-difot = it_difot-difot.
+        ENDIF.
+        APPEND st_zs103_sp TO it_zs103_sp.
+      ENDLOOP.
+
+      INSERT zdw_zs103_sp FROM TABLE it_zs103_sp.
+
+    ENDIF.
+  ENDIF.
+
+ENDFORM.                    "a01_select_data
+
+
+*&---------------------------------------------------------------------*
+*&      Form  Z01_VERIFY_SCREEN_DATA
+*&---------------------------------------------------------------------*
+*       text                                                           *
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM z01_verify_screen_data.
+
+  DATA: l_selection_of_displays(10),
+        l_strlen TYPE i.
+  DATA: it_tvtm LIKE tvtw OCCURS 0 WITH HEADER LINE,
+        BEGIN OF it_auart OCCURS 0,
+          auart LIKE tvak-auart,
+        END OF it_auart.
+
+*  CHECK sy-uname NE 'HOOPEKRI'.
+
+  REFRESH r_werks.
+* Check that the distribution channel exists.
+  SELECT * FROM tvtw INTO TABLE it_tvtw
+    WHERE vtweg IN s_vtweg.
+  IF sy-subrc NE 0.
+    MESSAGE e100 WITH 'No distribution channels found'.
+  ENDIF.
+
+  LOOP AT it_tvtw.
+* Check the user has display access for the distribution channel.
+    AUTHORITY-CHECK OBJECT 'V_VBAK_VKO'
+      ID 'VKORG' DUMMY
+      ID 'VTWEG' FIELD it_tvtw-vtweg
+      ID 'SPART' DUMMY
+      ID 'ACTVT' FIELD '03'.
+    IF sy-subrc NE 0.
+      MESSAGE e048 WITH it_tvtw-vtweg.
+    ENDIF.
+* get plants for the distribution channel
+    CLEAR r_werks.
+    SELECT * FROM  tvkwz
+      WHERE  vtweg EQ it_tvtw-vtweg
+        AND  werks IN s_werks.
+*Check to see if user have authorisation to the required plants
+      AUTHORITY-CHECK OBJECT 'M_IS_WERKS'
+        ID 'MCINF' FIELD 'S501'
+        ID 'WERKS' FIELD tvkwz-werks.
+      IF sy-subrc NE 0.
+        MESSAGE e139 WITH tvkwz-werks.
+      ENDIF.
+      MOVE 'EQ' TO r_werks-option.
+      MOVE 'I' TO r_werks-sign.
+      MOVE tvkwz-werks TO r_werks-low.
+      APPEND r_werks.
+    ENDSELECT.
+    IF sy-dbcnt = 0.
+*     Error determining plant for distribution channel &
+      MESSAGE e230 WITH it_tvtw-vtweg.
+    ENDIF.
+  ENDLOOP.
+
+* Load all document types in the range.
+  SELECT auart FROM tvak
+    INTO CORRESPONDING FIELDS OF TABLE it_auart
+   WHERE auart IN s_auart.
+* Loop through the document types and authority check them.
+  LOOP AT it_auart.
+    AUTHORITY-CHECK OBJECT 'V_VBAK_AAT'
+       ID 'AUART' FIELD it_auart-auart
+       ID 'ACTVT' FIELD '03'.
+*   If the authority check failed then show which one failed.
+    IF sy-subrc NE 0.
+      MESSAGE e049 WITH it_auart-auart.
+    ENDIF.
+  ENDLOOP.
+
+ENDFORM.                               " Z01_VERIFY_SCREEN_DATA
+
+*&---------------------------------------------------------------------*
+*&      Form  selection_screen_output
+*&---------------------------------------------------------------------*
+FORM selection_screen_output.
+  LOOP AT SCREEN.
+    IF screen-name = 'P_DW_SP'.
+      IF sy-uname = 'BATCHADMIN' OR sy-uname = 'HOOPEKRI'.
+        screen-active = '1'.
+      ELSE.
+        screen-active = '0'.
+      ENDIF.
+      MODIFY SCREEN.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  f_setup_order_types
+*&---------------------------------------------------------------------*
+*       Setup the default order types.
+*----------------------------------------------------------------------*
+FORM f_setup_order_types .
+
+  s_auart-sign = 'I'.
+  s_auart-option = 'EQ'.
+  s_auart-low = 'ZEDI'.
+  APPEND s_auart.
+
+  s_auart-low = 'ZOR'.
+  APPEND s_auart.
+
+ENDFORM.                    " f_setup_order_types
+*&---------------------------------------------------------------------*
+*&      Form  get_default_layout
+*&---------------------------------------------------------------------*
+*       Checks to see if there is a default ALV layout to be used
+*----------------------------------------------------------------------*
+FORM get_default_layout.
+
+* Setup the standard variant for the detail report
+  v_repid = sy-repid.
+  CLEAR: w_variant.
+  w_variant-report = v_repid.
+  SELECT SINGLE * FROM zbc_alv_layout
+    WHERE tcode EQ sy-tcode
+      AND uname EQ sy-uname.
+  IF sy-subrc NE 0.
+    v_save           = 'U'.
+  ELSE.
+    v_save           = 'A'.
+  ENDIF.
+  w_variant2 = w_variant.
+  CALL FUNCTION 'REUSE_ALV_VARIANT_DEFAULT_GET'
+    EXPORTING
+      i_save        = v_save
+    CHANGING
+      cs_variant    = w_variant2
+    EXCEPTIONS
+      wrong_input   = 1
+      not_found     = 2
+      program_error = 3
+      OTHERS        = 4.
+
+  IF sy-subrc EQ 0.
+    p_var = w_variant2-variant.
+  ENDIF.
+
+
+ENDFORM.                    " get_default_layout
+*&---------------------------------------------------------------------*
+*&      Form  calculate_early_or_late_date
+*&---------------------------------------------------------------------*
+*       Where tolerance days in customer master are less than or equal
+*       to setting in ZS002 (access key DIFOTMAXTOLDAYS) use shipping
+*       point calendar to exclude non-work days in early or late
+*       date calculation. (SD1K996672)
+*----------------------------------------------------------------------*
+FORM calculate_early_or_late_date USING p_early_or_late
+                                        p_base_date
+                                        p_tolerance_days
+                                        p_max_tol_days
+                                        p_calender
+                               CHANGING p_date.
+
+  DATA: l_adjust_days    LIKE mdcal-fkday,
+        l_correct_option LIKE scal-indicator.
+
+  IF p_tolerance_days LE p_max_tol_days AND
+     NOT p_max_tol_days IS INITIAL AND
+     NOT p_tolerance_days = 0 AND
+     NOT p_calender IS INITIAL.
+
+    l_adjust_days = p_tolerance_days.
+    IF p_early_or_late = 'LATE'.
+      l_correct_option = '+'.
+    ELSE.
+      l_correct_option = '-'.
+    ENDIF.
+
+    p_date = p_base_date.
+
+    DO l_adjust_days TIMES.
+
+      IF p_early_or_late = 'LATE'.
+        p_date = p_date + 1.
+      ELSE.
+        p_date = p_date - 1.
+      ENDIF.
+
+*     Below function is called in a loop as function
+*     WDKAL_DATE_ADD_FKDAYS does not appear to subtract
+*     days correctly.
+      CALL FUNCTION 'DATE_CONVERT_TO_FACTORYDATE'
+        EXPORTING
+          correct_option               = l_correct_option
+          date                         = p_date
+          factory_calendar_id          = p_calender
+        IMPORTING
+          date                         = p_date
+        EXCEPTIONS
+          calendar_buffer_not_loadable = 1
+          correct_option_invalid       = 2
+          date_after_range             = 3
+          date_before_range            = 4
+          date_invalid                 = 5
+          factory_calendar_not_found   = 6
+          OTHERS                       = 7.
+
+    ENDDO.
+  ELSE.
+    IF p_early_or_late = 'LATE'.
+      p_date = p_base_date + p_tolerance_days.
+    ELSE.
+      p_date = p_base_date - p_tolerance_days.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  alv_build_fieldcat
+*&---------------------------------------------------------------------*
+FORM alv_build_fieldcat.
+
+  CHECK: p_dw_sp NE abap_true.  "No output. Table ZDW_ZS103_SP only.
+
+  CALL FUNCTION 'REUSE_ALV_FIELDCATALOG_MERGE'
+    EXPORTING
+      i_program_name     = v_repid
+      i_internal_tabname = 'ST_REP_ALV1'
+*     i_structure_name   = w_tabname
+      i_inclname         = v_repid
+      i_bypassing_buffer = ' '
+    CHANGING
+      ct_fieldcat        = it_fieldcat[].
+
+*As per existing report, some fields are not output according to
+*selection screen checkboxes and/or radio buttons. There is also some
+*formatting of field headings and output styles, eg. no zeros, no
+*decimals. Setting fields to no_out means they are still avaiable to
+*the user if they wish to tweak the layout.
+  LOOP AT it_fieldcat INTO w_fieldcat.
+    CASE w_fieldcat-fieldname.
+      WHEN 'VTWEG'.
+        w_fieldcat-seltext_s = 'DC'.
+        w_fieldcat-seltext_m = 'Dist Ch'.
+        w_fieldcat-seltext_l = 'Distribution Channel'.
+        w_fieldcat-reptext_ddic = 'Distribution Channel'.
+        w_fieldcat-ddictxt = 'S'.
+      WHEN 'WERKS'.
+        w_fieldcat-seltext_s = 'Plant'.
+        w_fieldcat-seltext_m = 'Plant'.
+        w_fieldcat-seltext_l = 'Plant'.
+        w_fieldcat-reptext_ddic = 'Plant'.
+        w_fieldcat-ddictxt = 'L'.
+      WHEN 'KUNNR'.
+        w_fieldcat-seltext_s = 'Sold-To'.
+        w_fieldcat-seltext_m = 'Sold-To'.
+        w_fieldcat-seltext_l = 'Sold-To'.
+        w_fieldcat-reptext_ddic = 'Sold-To'.
+        w_fieldcat-ddictxt = 'L'.
+        w_fieldcat-hotspot = 'X'.
+      WHEN 'KUNWE'.
+        w_fieldcat-seltext_s = 'Ship-To'.
+        w_fieldcat-seltext_m = 'Ship-To'.
+        w_fieldcat-seltext_l = 'Ship-To'.
+        w_fieldcat-reptext_ddic = 'Ship-To'.
+        w_fieldcat-ddictxt = 'L'.
+        w_fieldcat-hotspot = 'X'.
+      WHEN 'NAME1'.
+        w_fieldcat-seltext_s = 'Sold-To Ds'.
+        w_fieldcat-seltext_m = 'Sold-To Desc'.
+        w_fieldcat-seltext_l = 'Sold-To Description'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'M'.
+      WHEN 'NAME2'.
+        w_fieldcat-seltext_s = 'Ship-To Ds'.
+        w_fieldcat-seltext_m = 'Ship-To Desc'.
+        w_fieldcat-seltext_l = 'Ship-To Description'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'M'.
+      WHEN 'BSTNK'.
+        w_fieldcat-seltext_s = 'Cust PO #'.
+        w_fieldcat-seltext_m = 'Customer PO No.'.
+        w_fieldcat-seltext_l = 'Customer PO Number'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'M'.
+      WHEN 'VBELN'.
+        w_fieldcat-seltext_s = 'Sales Doc'.
+        w_fieldcat-seltext_m = 'Sales Document'.
+        w_fieldcat-seltext_l = 'Sales Document'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-hotspot = 'X'.
+      WHEN 'ERDAT'.
+        w_fieldcat-seltext_s = 'Cr Date'.
+        w_fieldcat-seltext_m = 'Creation Date'.
+        w_fieldcat-seltext_l = 'Creation Date'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'L'.
+      WHEN 'ERNAM'.
+        w_fieldcat-seltext_s = 'Cr By'.
+        w_fieldcat-seltext_m = 'Created By'.
+        w_fieldcat-seltext_l = 'Created By'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'L'.
+        w_fieldcat-no_out = c_true.
+      WHEN 'WADAT'.
+        w_fieldcat-seltext_s = 'Plan GI DT'.
+        w_fieldcat-seltext_m = 'Plan GI Date'.
+        w_fieldcat-seltext_l = 'Planned Goods Issue Date'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+      WHEN 'WMENG'.
+        w_fieldcat-decimals_out = '0'.
+        w_fieldcat-datatype = 'INT4'.
+        w_fieldcat-no_zero = c_true.      "Ins SD1K993079
+*        w_fieldcat-do_sum = c_true.
+        w_fieldcat-seltext_s = 'Sch Ln Qty'.
+        w_fieldcat-seltext_m = 'Sched Line Qty'.
+        w_fieldcat-seltext_l = 'Schedule Line Quantity'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'M'.
+*        w_fieldcat-qfieldname = 'VRKME'.  "Del SD1K993187
+        CLEAR: w_fieldcat-qfieldname.      "Ins SD1K993187
+*     Start SD1K994923 - Lable new Original Qty/UoM Columns
+      WHEN 'ZZ_WMENG_ORG'.
+        w_fieldcat-decimals_out = '0'.
+        w_fieldcat-datatype = 'INT4'.
+        w_fieldcat-no_zero = c_true.
+        w_fieldcat-seltext_s = 'OrigOrdQty'.
+        w_fieldcat-seltext_m = 'Orig Order Qty'.
+        w_fieldcat-seltext_l = 'Original Order Quantity'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'M'.
+        CLEAR: w_fieldcat-qfieldname.
+      WHEN 'ZZ_VRKME_ORG'.
+        w_fieldcat-seltext_s = 'OrigQtyUoM'.
+        w_fieldcat-seltext_m = 'Orig Order Unit'.
+        w_fieldcat-seltext_l = 'Original Order Quantity Unit'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'M'.
+        CLEAR: w_fieldcat-qfieldname.
+      WHEN 'ZZ_WMENG_ORG_CALC'.
+        w_fieldcat-tech = c_true.
+      WHEN 'ZZ_VRKME_ORG_CALC'.
+        w_fieldcat-tech = c_true.
+*     End SD1K994923
+      WHEN 'KWMENG'.
+        w_fieldcat-decimals_out = '0'.
+        w_fieldcat-datatype = 'INT4'.
+*        w_fieldcat-do_sum = c_true.
+        w_fieldcat-no_zero = c_true.      "Ins SD1K993079
+        w_fieldcat-seltext_s = 'OrdItmQty'.
+        w_fieldcat-seltext_m = 'Order Item Qty'.
+        w_fieldcat-seltext_l = 'Order Item Qty in Sales UoM'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'M'.
+*        w_fieldcat-qfieldname = 'VRKME'.  "Del SD1K993187
+        CLEAR: w_fieldcat-qfieldname.      "Ins SD1K993187
+      WHEN 'POSNR'.
+        w_fieldcat-seltext_s = 'IT No'.
+        w_fieldcat-seltext_m = 'Item Number'.
+        w_fieldcat-seltext_l = 'Item Number'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-hotspot = 'X'.
+      WHEN 'MATNR'.
+        w_fieldcat-seltext_s = 'Mat No.'.
+        w_fieldcat-seltext_m = 'Material Numb'.
+        w_fieldcat-seltext_l = 'Material Number'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'L'.
+        w_fieldcat-hotspot = 'X'.
+      WHEN 'MAKTX'.
+        w_fieldcat-seltext_s = 'Mat Desc'.
+        w_fieldcat-seltext_m = 'Material Desc'.
+        w_fieldcat-seltext_l = 'Material Description'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'M'.
+      WHEN 'VRKME'.
+        w_fieldcat-seltext_s = 'SLUM'.
+        w_fieldcat-seltext_m = 'Item Sales UOM'.
+        w_fieldcat-seltext_l = 'Item Sales Unit'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+      WHEN 'EDATU'.
+        w_fieldcat-seltext_s = 'Req Del Dt'.
+        w_fieldcat-seltext_m = 'Req Delv Date'.
+        w_fieldcat-seltext_l = 'Required Delivery Date'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+      WHEN 'KLMENG'.
+        w_fieldcat-decimals_out = '0'.
+        w_fieldcat-datatype = 'INT4'.
+        w_fieldcat-no_zero = c_true.      "Ins SD1K993079
+*        w_fieldcat-do_sum = c_true.
+        w_fieldcat-seltext_s = 'BaseItmQty'.
+        w_fieldcat-seltext_m = 'Item Qty - Base Unit'.
+        w_fieldcat-seltext_l = 'Item Qty in Base Unit'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+*        w_fieldcat-qfieldname = 'MEINS'.  "Del SD1K993187
+        CLEAR: w_fieldcat-qfieldname.      "Ins SD1K993187
+      WHEN 'MEINS'.
+        w_fieldcat-seltext_s = 'BUM'.
+        w_fieldcat-seltext_m = 'Item Base UOM'.
+        w_fieldcat-seltext_l = 'Item Base Unit'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+      WHEN 'ABGRU'.
+        w_fieldcat-seltext_s = 'RR'.
+        w_fieldcat-seltext_m = 'Reason for Rejection'.
+        w_fieldcat-seltext_l = 'Reason for Rejection'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+      WHEN 'ETENR'.
+        w_fieldcat-seltext_s = 'SLN'.
+        w_fieldcat-seltext_m = 'Sched Line No.'.
+        w_fieldcat-seltext_l = 'Schedule Line Number'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+      WHEN 'LMENG'.
+        w_fieldcat-decimals_out = '0'.
+        w_fieldcat-datatype = 'INT4'.
+        w_fieldcat-do_sum = c_true.    "Ins SD1K993079
+        w_fieldcat-no_zero = c_true.   "Ins SD1K993079
+        w_fieldcat-seltext_s = 'BaseSchQty'.
+        w_fieldcat-seltext_m = 'Sched Line Qty - Base Unit'.
+        w_fieldcat-seltext_l = 'Schedule Line Quantity in Base Unit'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+*        w_fieldcat-qfieldname = 'MEINS'.  "Del SD1K993187
+        CLEAR: w_fieldcat-qfieldname.      "Ins SD1K993187
+      WHEN 'ZZ_WADAT_ORG'.
+        w_fieldcat-seltext_s = 'OrgPlanGI'.
+        w_fieldcat-seltext_m = 'Orig Planned GI Date'.
+        w_fieldcat-seltext_l = 'Original Planned GI Date'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+      WHEN 'ZZ_WADAT_ORG_CALC'.
+        w_fieldcat-tech = c_true.
+      WHEN 'VBELN_D'.
+        w_fieldcat-seltext_s = 'Delivery'.
+        w_fieldcat-seltext_m = 'Delivery No'.
+        w_fieldcat-seltext_l = 'Delivery Number'.
+        w_fieldcat-ddictxt = 'M'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-hotspot = 'X'.
+      WHEN 'POSNR_D'.
+        w_fieldcat-seltext_s = 'Delv Item'.
+        w_fieldcat-seltext_m = 'Delivery Item'.
+        w_fieldcat-seltext_l = 'Delivery Item Number'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-hotspot = 'X'.
+        w_fieldcat-hotspot = 'X'.
+      WHEN 'VSTEL'.
+        w_fieldcat-seltext_s = 'Ship Pt'.
+        w_fieldcat-seltext_m = 'Shipping Point'.
+        w_fieldcat-seltext_l = 'Shipping Point'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'WADAT_IST'.
+        w_fieldcat-seltext_s = 'Actual GI'.
+        w_fieldcat-seltext_m = 'Actual GI Date'.
+        w_fieldcat-seltext_l = 'Actual GI Date'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'LFIMG'.
+        w_fieldcat-decimals_out = '0'.
+        w_fieldcat-datatype = 'INT4'.
+*        w_fieldcat-do_sum = c_true.
+        w_fieldcat-seltext_s = 'Delv Qty'.
+        w_fieldcat-seltext_m = 'Delivery Qty'.
+        w_fieldcat-seltext_l = 'Delivery Quantity'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+*        w_fieldcat-qfieldname = 'VRKME_D'.  "Del SD1K993187
+        CLEAR: w_fieldcat-qfieldname.      "Ins SD1K993187
+      WHEN 'VRKME_D'.
+        w_fieldcat-seltext_s = 'DUOM'.
+        w_fieldcat-seltext_m = 'Delivery Unit'.
+        w_fieldcat-seltext_l = 'Delivery Unit'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'LFMNG'.
+        w_fieldcat-decimals_out = '0'.
+        w_fieldcat-datatype = 'INT4'.
+*        w_fieldcat-do_sum = c_true.
+        w_fieldcat-seltext_s = 'BaseDelQty'.
+        w_fieldcat-seltext_m = 'Delivery Qty - Base Unit'.
+        w_fieldcat-seltext_l = 'Delivery Quantity in Base Unit'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+*        w_fieldcat-qfieldname = 'MEINS'.  "Del SD1K993187
+        CLEAR: w_fieldcat-qfieldname.      "Ins SD1K993187
+      WHEN 'LFMNG_C'.
+        w_fieldcat-decimals_out = '0'.
+        w_fieldcat-no_zero = c_true.
+        w_fieldcat-datatype = 'INT4'.
+        w_fieldcat-seltext_s = 'BaseTotQty'.
+        w_fieldcat-seltext_m = 'Total Delv Qty - Base Unit'.
+        w_fieldcat-seltext_l =
+                'Total Delivery Quantity in Base Unit'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'S'.
+*          w_fieldcat-qfieldname = 'MEINS'.  "Del SD1K993187
+        CLEAR: w_fieldcat-qfieldname.      "Ins SD1K993187
+*     Start SD1K993079 - Field cat for Total Delivery Qty % field
+      WHEN 'LFMNG_C_P'.
+        w_fieldcat-decimals_out = '2'.
+        w_fieldcat-seltext_s = 'Delv Qty %'.
+        w_fieldcat-seltext_m = 'Delv Qty %'.
+        w_fieldcat-seltext_l = 'Delivered Quantity %'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-outputlen = '10'.
+        w_fieldcat-do_sum = c_true.
+        w_fieldcat-no_zero = c_true.
+*     End SD1K993079
+      WHEN 'LINE_T'.
+        w_fieldcat-seltext_s = 'Total'.
+        w_fieldcat-seltext_m = 'Total'.
+        w_fieldcat-seltext_l = 'Total'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-do_sum = c_true.
+        w_fieldcat-no_zero = c_true.
+*     Start SD1K994923 - Lable new DIF Original Columns
+      WHEN 'DIF_O'.
+        w_fieldcat-seltext_s = 'DelInFull'.
+        w_fieldcat-seltext_m = 'Delv in Full'.
+        w_fieldcat-seltext_l = 'Delivery in Full'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-do_sum = c_true.
+      WHEN 'DIF_OP'.
+        w_fieldcat-seltext_s = 'DIF Perc %'.
+        w_fieldcat-seltext_m = 'DIF Perc %'.
+        w_fieldcat-seltext_l = 'Delivery in Full %'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-outputlen = 3.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-outputlen = '10'.
+        w_fieldcat-do_sum = c_true.
+        w_fieldcat-no_zero = c_true.
+*     End SD1K994923
+      WHEN 'DIF'.
+        w_fieldcat-seltext_s = 'Rev DIF'.
+        w_fieldcat-seltext_m = 'Rev Delv in Full'.
+        w_fieldcat-seltext_l = 'Revised Delivery in Full'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-do_sum = c_true.
+      WHEN 'DIF_P'.
+        w_fieldcat-seltext_s = 'Rev DIF  %'.
+        w_fieldcat-seltext_m = 'Rev DIF  %'.
+        w_fieldcat-seltext_l = 'Revised Delivery in Full %'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-outputlen = 3.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-do_sum = c_true.
+        w_fieldcat-no_zero = c_true.
+      WHEN 'ZTOLQP'.
+        w_fieldcat-seltext_s = 'DelQtyTol+'.
+        w_fieldcat-seltext_m = 'Delv Qty Tol +'.
+        w_fieldcat-seltext_l = 'Delivery Qty Tol +'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'ZTOLQM'.
+        w_fieldcat-seltext_s = 'DelQtyTol-'.
+        w_fieldcat-seltext_m = 'Delv Qty Tol -'.
+        w_fieldcat-seltext_l = 'Delivery Qty Tol -'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'DOT_O'.
+        w_fieldcat-seltext_s = 'DelOnTime'.
+        w_fieldcat-seltext_m = 'Delv on Time'.
+        w_fieldcat-seltext_l = 'Delivery on Time'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-do_sum = c_true.
+      WHEN 'DOT_OP'.
+        w_fieldcat-seltext_s = 'DOT Perc %'.
+        w_fieldcat-seltext_m = 'DOT Perc %'.
+        w_fieldcat-seltext_l = 'Delivery on Time %'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-outputlen = 3.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-outputlen = '10'.
+        w_fieldcat-do_sum = c_true.
+        w_fieldcat-no_zero = c_true.
+      WHEN 'DOT'.
+        w_fieldcat-seltext_s = 'Rev DOT'.
+        w_fieldcat-seltext_m = 'Rev Delv on Time'.
+        w_fieldcat-seltext_l = 'Revised Delivery on Time'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-do_sum = c_true.
+      WHEN 'DOT_P'.
+        w_fieldcat-seltext_s = 'Rev DOT  %'.
+        w_fieldcat-seltext_m = 'Rev DOT  %'.
+        w_fieldcat-seltext_l = 'Revised Delivery on Time %'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-outputlen = 3.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-outputlen = '10'.
+        w_fieldcat-do_sum = c_true.
+        w_fieldcat-no_zero = c_true.
+      WHEN 'ZTOLDP'.
+        w_fieldcat-seltext_s = 'Days Tol +'.
+        w_fieldcat-seltext_m = 'Days Tol +'.
+        w_fieldcat-seltext_l = 'Days Tol +'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'ZTOLDM'.
+        w_fieldcat-seltext_s = 'Days Tol -'.
+        w_fieldcat-seltext_m = 'Days Tol -'.
+        w_fieldcat-seltext_l = 'Days Tol -'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'DIFOT_O'.
+        w_fieldcat-seltext_s = 'DIFOT'.
+        w_fieldcat-seltext_m = 'Delv in Full & on Time'.
+        w_fieldcat-seltext_l = 'Delivery in Full and on Time'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-do_sum = c_true.
+      WHEN 'DIFOT_OP'.
+        w_fieldcat-seltext_s = 'DIFOT Per%'.
+        w_fieldcat-seltext_m = 'DIFOT Per%'.
+        w_fieldcat-seltext_l = 'Delivery in Full & on Time %'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-outputlen = 3.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-outputlen = '10'.
+        w_fieldcat-do_sum = c_true.
+        w_fieldcat-no_zero = c_true.
+      WHEN 'DIFOT'.
+        w_fieldcat-seltext_s = 'Rev DIFOT'.
+        w_fieldcat-seltext_m = 'Rev Delv in Full & on Time'.
+        w_fieldcat-seltext_l = 'Revised Delivery in Full and on Time'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-do_sum = c_true.
+      WHEN 'DIFOT_P'.
+        w_fieldcat-seltext_s = 'Rev DIFOT%'.
+        w_fieldcat-seltext_m = 'Rev DIFOT %'.
+        w_fieldcat-seltext_l = 'Revised Delivery in Full and on Time %'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-outputlen = 3.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-datatype = 'INT1'.
+        w_fieldcat-outputlen = '10'.
+        w_fieldcat-do_sum = c_true.
+        w_fieldcat-no_zero = c_true.
+      WHEN 'ZZ_RCODE'.
+        w_fieldcat-seltext_s = 'RC Date'.
+        w_fieldcat-seltext_m = 'RC Date Chg'.
+        w_fieldcat-seltext_l = 'Reason Code for Date Change'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'RTEXT'.
+        w_fieldcat-seltext_s = 'RCD Date'.
+        w_fieldcat-seltext_m = 'RC Desc Date'.
+        w_fieldcat-seltext_l = 'Reason Code Description - Date Change'.
+        w_fieldcat-ddictxt = 'M'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'ZZ_RC_CUST'.
+        w_fieldcat-seltext_s = 'RC.Cust.D'.
+        w_fieldcat-seltext_m = 'RC by Cust Date'.
+        w_fieldcat-seltext_l = 'RC Initiated by Customer - Date Change'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'ZZ_RCODE_QTY'.
+        w_fieldcat-seltext_s = 'RC Qty'.
+        w_fieldcat-seltext_m = 'RC Qty Chg'.
+        w_fieldcat-seltext_l = 'Reason Code for Quantity Change'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'RTEXT_QTY'.
+        w_fieldcat-seltext_s = 'RCD Qty'.
+        w_fieldcat-seltext_m = 'RC Desc Qty'.
+        w_fieldcat-seltext_l = 'Reason Code Description - Qty Change'.
+        w_fieldcat-ddictxt = 'M'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'ZZ_RC_CUST_QTY'.
+        w_fieldcat-seltext_s = 'RC.Cust.Q'.
+        w_fieldcat-seltext_m = 'RC by Cust Qty'.
+        w_fieldcat-seltext_l = 'RC Initiated by Customer - Qty Change'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN 'MVGR5'.
+        w_fieldcat-seltext_s = 'Mat Grp 5'.
+        w_fieldcat-seltext_m = 'Material Grp 5'.
+        w_fieldcat-seltext_l = 'Material Group 5'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'L'.
+        w_fieldcat-no_out = c_true.
+*     Start SD1K993079 - Field cat for Order/Item/Sch field
+      WHEN 'ORDER_ITEM_SCH_SL'.
+        w_fieldcat-seltext_l = 'Order/Item/Sch'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'L'.
+        w_fieldcat-hotspot = 'X'.
+*     End SD1K993079
+      WHEN 'KUNZR'.
+        w_fieldcat-seltext_s = 'Retailer'.
+        w_fieldcat-seltext_m = 'Retailer'.
+        w_fieldcat-seltext_l = 'Retailer'.
+        w_fieldcat-reptext_ddic = 'Retailer'.
+        w_fieldcat-ddictxt = 'L'.
+        w_fieldcat-hotspot = 'X'.
+      WHEN 'NAMER'.
+        w_fieldcat-seltext_s = 'Retail Nm'.
+        w_fieldcat-seltext_m = 'Retailer Name'.
+        w_fieldcat-seltext_l = 'Retailer Name'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+        w_fieldcat-ddictxt = 'M'.
+      WHEN 'PSTYV'.
+        w_fieldcat-seltext_s = 'Item Cat.'.
+        w_fieldcat-seltext_m = 'Item Category'.
+        w_fieldcat-seltext_l = 'Item Category'.
+        w_fieldcat-ddictxt = 'S'.
+        w_fieldcat-reptext_ddic = w_fieldcat-seltext_l.
+      WHEN OTHERS.
+*        w_fieldcat-no_out = c_true.
+        w_fieldcat-tech = c_true.
+    ENDCASE.
+    CLEAR w_fieldcat-key.      "Users want no key fields
+    MODIFY it_fieldcat FROM w_fieldcat.
+  ENDLOOP.
+
+ENDFORM.                    " alv_build_fieldcat
+
+*---------------------------------------------------------------------*
+*       FORM F4_FOR_VARIANT                                           *
+*---------------------------------------------------------------------*
+*       Check for exisiting ALV Layouts                               *
+*---------------------------------------------------------------------*
+FORM f4_for_variant.
+
+  CALL FUNCTION 'LVC_VARIANT_F4'
+    EXPORTING
+      is_variant    = w_variant
+      i_save        = v_save
+    IMPORTING
+      e_exit        = v_exit
+      es_variant    = w_variant2
+    EXCEPTIONS
+      not_found     = 1
+      program_error = 2
+      OTHERS        = 3.
+
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE 'S'      NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ELSE.
+    IF v_exit = space.
+      p_var = w_variant2-variant.
+    ENDIF.
+  ENDIF.
+
+ENDFORM.                    "f4_for_variant
+
+*&---------------------------------------------------------------------*
+*&      Form  alv_output
+*&---------------------------------------------------------------------*
+FORM alv_output .
+
+  CHECK: p_dw_sp NE abap_true.  "No output. Table ZDW_ZS103_SP only.
+
+*Define layout
+  CLEAR: w_layout.
+*  w_layout-colwidth_optimize = c_true. "Commented for INC1577313
+  w_layout-zebra = c_true.
+*  w_layout-totals_text = 'Total Percentage'.
+*  w_layout-subtotals_text = 'Subtotal Percentage'.
+  w_layout-coltab_fieldname = 'COLTAB'.
+
+  SORT it_difot BY vtweg werks kunnr vbeln posnr wadat_ist.  "Default
+  REFRESH: it_sort.
+  IF NOT p_subt IS INITIAL.
+*Define ALV sort and subtotals
+    CLEAR: w_sort.
+    w_sort-spos = '01'.
+    w_sort-fieldname = 'WERKS'.
+    w_sort-up = c_true.
+    w_sort-subtot = c_true.
+    APPEND w_sort TO it_sort.
+    CLEAR: w_sort.
+    w_sort-spos = '02'.
+    w_sort-fieldname = 'KUNNR'.
+    w_sort-up = c_true.
+    w_sort-subtot = c_true.
+    w_sort-expa = c_true.
+  ENDIF.
+
+  PERFORM alv_events.
+  CLEAR: w_event_exit.
+  w_event_exit-ucomm = '&REFRESH'.
+  w_event_exit-before = c_true.
+  APPEND w_event_exit TO it_event_exit.
+
+  IF NOT p_agrd IS INITIAL.
+    v_func = 'REUSE_ALV_GRID_DISPLAY'.
+  ELSE.
+    v_func = 'REUSE_ALV_LIST_DISPLAY'.
+  ENDIF.
+  CALL FUNCTION v_func
+    EXPORTING
+      i_callback_program       = v_repid
+      i_callback_user_command  = 'ALV_USER_COMMAND'
+      i_callback_pf_status_set = 'ALV_PF_STATUS'
+      i_callback_top_of_page   = 'ALV_TOP_OF_PAGE'
+      is_layout                = w_layout
+      it_fieldcat              = it_fieldcat
+      it_sort                  = it_sort
+      i_save                   = v_save
+      it_events                = it_events
+      it_event_exit            = it_event_exit
+      is_variant               = w_variant
+    TABLES
+      t_outtab                 = it_difot
+    EXCEPTIONS
+      program_error            = 1
+      OTHERS                   = 2.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+ENDFORM.                    " output_alv
+
+*&---------------------------------------------------------------------*
+*&      Form  ALV_USER_COMMAND
+*&---------------------------------------------------------------------*
+FORM alv_user_command USING  r_ucomm      LIKE sy-ucomm     "#EC CALLED
+                         rs_selfield TYPE slis_selfield.
+*Double-click to launch VA03 as per existing functionality
+  CASE r_ucomm.
+    WHEN '&IC1'.
+      READ TABLE it_difot INDEX rs_selfield-tabindex.
+      CASE rs_selfield-fieldname.
+        WHEN 'VBELN' OR 'POSNR' OR 'ORDER_ITEM_SCH_SL'.
+          CHECK NOT it_difot-vbeln IS INITIAL.
+
+          IF NOT it_difot-pur_order EQ abap_true.
+            SET PARAMETER ID 'AUN' FIELD it_difot-vbeln.
+            CALL TRANSACTION 'VA03' AND SKIP FIRST SCREEN.
+          ELSE.
+            SET PARAMETER ID 'BES' FIELD it_difot-vbeln.
+            CALL TRANSACTION 'ME23N' AND SKIP FIRST SCREEN.
+          ENDIF.
+
+        WHEN 'VBELN_D' OR 'POSNR_D'.
+          CHECK NOT it_difot-vbeln_d IS INITIAL.
+          SET PARAMETER ID 'VL' FIELD it_difot-vbeln_d.
+          CALL TRANSACTION 'VL03N' AND SKIP FIRST SCREEN.
+        WHEN 'MATNR'.
+          CHECK NOT it_difot-matnr IS INITIAL.
+          CLEAR: it_bdcdata.
+          REFRESH: it_bdcdata.
+          PERFORM bdc_dynpro USING 'SAPLMGMM' '0060'.
+          PERFORM bdc_field  USING 'RMMG1-MATNR' it_difot-matnr.
+          PERFORM bdc_field  USING 'BDC_OKCODE'   '=AUSW'.
+
+          PERFORM bdc_dynpro USING 'SAPLMGMM' '0070'.
+          PERFORM bdc_field  USING 'MSICHTAUSW-KZSEL(01)' 'X'.
+          PERFORM bdc_field  USING 'BDC_OKCODE'   '=ENTR'.
+          CALL TRANSACTION 'MM03' USING it_bdcdata
+                 OPTIONS FROM v_params.
+        WHEN 'KUNNR' OR 'NAME1'.
+          CHECK NOT it_difot-kunnr IS INITIAL.
+          SET PARAMETER ID 'KUN' FIELD it_difot-kunnr.
+          SET PARAMETER ID 'VKO' FIELD it_difot-vkorg.
+          SET PARAMETER ID 'VTW' FIELD it_difot-vtweg.
+          SET PARAMETER ID 'SPA' FIELD '20'.
+          CALL TRANSACTION 'XD03' AND SKIP FIRST SCREEN.
+        WHEN 'KUNWE' OR 'NAME2'.
+          CHECK NOT it_difot-kunwe IS INITIAL.
+          SET PARAMETER ID 'KUN' FIELD it_difot-kunwe.
+          SET PARAMETER ID 'VKO' FIELD it_difot-vkorg.
+          SET PARAMETER ID 'VTW' FIELD it_difot-vtweg.
+          SET PARAMETER ID 'SPA' FIELD '20'.
+          CALL TRANSACTION 'XD03' AND SKIP FIRST SCREEN.
+        WHEN 'KUNZR' OR 'NAMER'.
+          CHECK NOT it_difot-kunzr IS INITIAL.
+          SET PARAMETER ID 'KUN' FIELD it_difot-kunzr.
+          SET PARAMETER ID 'VKO' FIELD it_difot-vkorg.
+          SET PARAMETER ID 'VTW' FIELD it_difot-vtweg.
+          SET PARAMETER ID 'SPA' FIELD '20'.
+          CALL TRANSACTION 'XD03' AND SKIP FIRST SCREEN.
+      ENDCASE.
+    WHEN '&REFRESH'.
+      PERFORM alv_refresh.
+      rs_selfield-exit = c_true.
+  ENDCASE.
+  CLEAR: v_prin.
+
+ENDFORM.                    "user_command
+
+*&--------------------------------------------------------------------*
+*&      Form  alv_top_of_page
+*&--------------------------------------------------------------------*
+*       Basic Top of Page data for report
+*---------------------------------------------------------------------*
+FORM alv_top_of_page.                                       "#EC CALLED
+
+  REFRESH it_page.
+
+  CLEAR w_page.
+  w_page-typ = 'H'.
+  w_page-info = sy-title(60).
+  APPEND w_page TO it_page.
+
+  CLEAR w_page.
+  w_page-typ = 'S'.
+  w_page-key = 'Report ID:'(a01).
+  w_page-info = v_repid.
+  APPEND w_page TO it_page.
+
+  CLEAR w_page.
+  w_page-typ = 'S'.
+  w_page-key = 'Transaction:'(a04).
+  w_page-info = sy-tcode.
+  APPEND w_page TO it_page.
+
+  CLEAR w_page.
+  w_page-typ = 'S'.
+  w_page-key = 'Date run:'(a02).
+  PERFORM convert_run_date.
+  APPEND w_page TO it_page.
+
+  CLEAR w_page.
+  w_page-typ = 'S'.
+  w_page-key = 'User ID:'(a03).
+  w_page-info = sy-uname.
+  APPEND w_page TO it_page.
+
+  CALL FUNCTION 'REUSE_ALV_COMMENTARY_WRITE'
+    EXPORTING
+      it_list_commentary = it_page
+      i_logo             = ' '.
+
+
+ENDFORM.                    "alv_top_of_page
+
+*&---------------------------------------------------------------------*
+*&      Form  convert_run_date
+*&---------------------------------------------------------------------*
+*       Convert run date into DD Month YYYY
+*----------------------------------------------------------------------*
+FORM convert_run_date .
+  w_date = sy-datum.
+  v_month = w_date-month.
+  SELECT SINGLE ltx FROM t247 INTO v_month
+         WHERE spras = sy-langu
+         AND   mnr   = w_date-month.
+  IF sy-subrc = 0.
+    CONCATENATE w_date-day v_month w_date-year INTO w_page-info
+                SEPARATED BY space.
+  ELSE.
+    WRITE sy-datum TO w_page-info DD/MM/YY.
+  ENDIF.
+
+ENDFORM.                    "convert_run_date
+*&---------------------------------------------------------------------*
+*&      Form  alv_events
+*&---------------------------------------------------------------------*
+*       This report has a custom total calculation.
+*       To cater for this, we define a form in event 'END_OF_PAGE'
+*       which is called during the ALV grid output and subsequent grid
+*       functions by the user.
+*       Form ALV_SUBTOTAL_CHANGES explains the process.
+*&---------------------------------------------------------------------*
+FORM alv_events .
+
+*  CHECK sy-batch IS INITIAL. "Commented for INC1577313
+  CALL FUNCTION 'REUSE_ALV_EVENTS_GET'
+    EXPORTING
+      i_list_type = 0
+    IMPORTING
+      et_events   = it_events.
+
+  IF p_agrd EQ c_true.
+    READ TABLE it_events INTO w_events WITH KEY name = 'TOP_OF_PAGE'.
+    w_events-form = 'ALV_SUBTOTAL_GRID'.
+  ELSE.
+    READ TABLE it_events INTO w_events
+      WITH KEY name = 'BEFORE_LINE_OUTPUT'.
+    w_events-form = 'ALV_SUBTOTAL_LIST'.
+  ENDIF.
+  MODIFY it_events FROM w_events TRANSPORTING form
+    WHERE name = w_events-name.
+
+ENDFORM.                    " alv_events
+
+*&---------------------------------------------------------------------*
+*&      Form  ALV_SUBTOTAL_GRID
+*&---------------------------------------------------------------------*
+*       Subtotals have all been calculated at this stage.
+*       Get totals and subtotal1. Loop through and apply custom
+*       calculation to the subtotal fields for the gross_cont_perc field
+*       A soft refresh of the grid is then required to make the new
+*       totals show immediately.
+*&---------------------------------------------------------------------*
+FORM alv_subtotal_grid.
+*Set the percentages for subtotals
+  DATA: total        TYPE REF TO data,
+        subto01      TYPE REF TO data,
+        subto02      TYPE REF TO data,
+        subto03      TYPE REF TO data,
+        subto04      TYPE REF TO data,
+        subto05      TYPE REF TO data,
+        subto06      TYPE REF TO data,
+        subto07      TYPE REF TO data,
+        subto08      TYPE REF TO data,
+        subto09      TYPE REF TO data,
+        grplvl       TYPE lvc_t_grpl,
+        lcl_alvgrid  TYPE REF TO cl_gui_alv_grid,
+        lw_grplvl    TYPE lvc_s_grpl,
+        lw_subtot    LIKE it_difot,
+        item(20)     TYPE c,
+        l_counter(2) TYPE n,
+        BEGIN OF it_lvl OCCURS 9,
+          no TYPE i,
+        END OF it_lvl,
+        tab_name TYPE string.
+
+
+  FIELD-SYMBOLS: <fsubtot> TYPE STANDARD TABLE,
+                 <fs_tab>  TYPE ANY TABLE,
+                 <item>.
+
+  CHECK p_agrd EQ c_true.
+  IF sy-ucomm IS INITIAL.
+    PERFORM alv_top_of_page.
+    CLEAR: v_prin.
+  ENDIF.
+  CALL FUNCTION 'GET_GLOBALS_FROM_SLVC_FULLSCR'
+    IMPORTING
+      e_grid = lcl_alvgrid.
+
+  CALL METHOD lcl_alvgrid->get_subtotals
+    IMPORTING
+      ep_collect00   = total
+      ep_collect01   = subto01
+      ep_collect02   = subto02
+      ep_collect03   = subto03
+      ep_collect04   = subto04
+      ep_collect05   = subto05
+      ep_collect06   = subto06
+      ep_collect07   = subto07
+      ep_collect08   = subto08
+      ep_collect09   = subto09
+      et_grouplevels = grplvl.
+
+* Start SD1K993187 - Correct subtotalling
+
+  CLEAR: l_counter.
+
+  IF NOT grplvl[] IS INITIAL.
+    DO 9 TIMES.
+      l_counter = l_counter + 1.
+      CONCATENATE 'subto' l_counter INTO item.
+      CONDENSE item.
+      ASSIGN (item) TO <item>.
+      CHECK sy-subrc EQ 0.
+      ASSIGN <item>->* TO <fsubtot>.
+
+      LOOP AT <fsubtot> INTO lw_subtot.
+        MOVE lw_subtot-line_t TO it_subt-cnt.
+        MOVE-CORRESPONDING lw_subtot TO it_subt.
+        PERFORM set_subtotal USING lw_subtot it_subt.
+        lw_subtot-name1 = 'Subtotal'.
+        lw_subtot-coltab[] = lt_coltab[].
+        MODIFY <fsubtot> FROM lw_subtot.
+      ENDLOOP.
+      IF sy-subrc EQ 0.
+        IF v_prin IS INITIAL AND ( sy-ucomm = 'PRIN' OR
+           sy-ucomm = '&RNT_PREV' OR sy-ucomm = '&RNT' OR
+           sy-ucomm = '%PC' ).
+          CONCATENATE '(SAPLKKBL)IT_COLLECT' l_counter '[]'
+            INTO tab_name.
+          ASSIGN (tab_name) TO <fs_tab>.
+          IF <fs_tab> IS ASSIGNED AND <fsubtot> IS ASSIGNED.
+            <fs_tab> = <fsubtot>.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+    ENDDO.
+  ENDIF.
+* End SD1K993187
+
+*    IF NOT grplvl[] IS INITIAL.
+** Initialise subtotal levels inetrnal table
+*      DO 9 TIMES.
+*        it_lvl-no = 0.
+*        APPEND it_lvl.
+*      ENDDO.
+*      LOOP AT grplvl INTO lw_grplvl.
+*        READ TABLE it_lvl INDEX lw_grplvl-level.
+*        ADD 1 TO it_lvl-no.
+*        MODIFY it_lvl INDEX lw_grplvl-level.
+*        CLEAR: item.
+*        CONCATENATE 'subto' lw_grplvl-collect INTO item.
+*        CONDENSE item.
+*        ASSIGN (item) TO <item>.
+*        CHECK sy-subrc EQ 0.
+*        ASSIGN <item>->* TO <fsubtot>.
+*
+*        READ TABLE <fsubtot> INTO lw_subtot INDEX it_lvl-no.
+*        IF sy-subrc EQ 0.
+*          IF NOT p_consam IS INITIAL.
+*            REFRESH: it_redu.
+*            LOOP AT it_difot FROM lw_grplvl-index_from
+*                             TO lw_grplvl-index_to.
+*              READ TABLE it_redu WITH KEY
+*                          vbeln = it_difot-vbeln
+*                         posnr = it_difot-posnr
+*                         wadat_ist = it_difot-wadat_ist.
+*              IF sy-subrc NE 0.
+*                MOVE-CORRESPONDING it_difot TO it_redu.
+*                APPEND it_redu.
+*              ELSE.
+*                SUBTRACT 1 FROM lw_grplvl-counter.
+*              ENDIF.
+*            ENDLOOP.
+**       Start SD1K993079 - Summing: Check reducer
+*          ELSEIF NOT p_contol IS INITIAL.
+*            REFRESH: it_redu.
+*            LOOP AT it_difot FROM lw_grplvl-index_from
+*                             TO lw_grplvl-index_to.
+*              READ TABLE it_redu WITH KEY vbeln = it_difot-vbeln
+*                                          posnr = it_difot-posnr.
+*              IF sy-subrc NE 0.
+*                MOVE-CORRESPONDING it_difot TO it_redu.
+*                APPEND it_redu.
+*              ELSE.
+*                SUBTRACT 1 FROM lw_grplvl-counter.
+*              ENDIF.
+*            ENDLOOP.
+**       End SD1K993079
+*          ENDIF.
+*          CLEAR: it_subt.
+*          MOVE-CORRESPONDING lw_subtot TO it_subt.
+*          MOVE lw_grplvl-counter TO it_subt-cnt.
+*          PERFORM set_subtotal USING lw_subtot it_subt.
+*          lw_subtot-name1 = 'Subtotal'.
+*          MODIFY <fsubtot> FROM lw_subtot INDEX it_lvl-no.
+*          IF v_prin IS INITIAL AND ( sy-ucomm = 'PRIN' OR
+*             sy-ucomm = '&RNT_PREV' OR sy-ucomm = '&RNT' OR
+*             sy-ucomm = '%PC' ).
+*            CONCATENATE '(SAPLKKBL)IT_COLLECT' lw_grplvl-collect '[]'
+*              INTO tab_name.
+*            ASSIGN (tab_name) TO <fs_tab>.
+*            IF <fs_tab> IS ASSIGNED AND <fsubtot> IS ASSIGNED.
+*              <fs_tab> = <fsubtot>.
+*            ENDIF.
+*          ENDIF.
+*        ENDIF.
+*
+*      ENDLOOP.
+*    ENDIF.
+
+  ASSIGN total->* TO <fsubtot>.
+  LOOP AT <fsubtot> INTO lw_subtot.
+    v_tabix = sy-tabix.
+    CLEAR: it_subt.
+    MOVE-CORRESPONDING lw_subtot TO it_subt.
+    DESCRIBE TABLE it_difot LINES it_subt-cnt.
+
+    SUBTRACT v_reduce FROM it_subt-cnt.
+
+*   Start SD1K997352 - Fix issue with Totals
+    CLEAR: it_subt-cnt.
+    LOOP AT it_difot WHERE line_t = '1'.
+      it_subt-cnt = it_subt-cnt + 1.
+    ENDLOOP.
+*   End SD1K997352
+
+    PERFORM set_subtotal USING lw_subtot it_subt.
+    lw_subtot-name1 = 'Total'.
+    lw_subtot-coltab[] = lt_coltab[].
+    MODIFY <fsubtot> FROM lw_subtot INDEX v_tabix.
+  ENDLOOP.
+
+  IF sy-ucomm = 'PRIN' OR sy-ucomm = '&RNT_PREV' OR sy-ucomm = '&RNT' OR
+     sy-ucomm = '%PC'.
+    IF v_prin IS INITIAL.
+      v_prin = c_true.
+      tab_name = '(SAPLKKBL)IT_COLLECT00[]'.
+      ASSIGN (tab_name) TO <fs_tab>.
+      IF <fs_tab> IS ASSIGNED AND <fsubtot> IS ASSIGNED.
+        <fs_tab> = <fsubtot>.
+      ENDIF.
+    ENDIF.
+  ELSE.
+*The refresh causes issues for right-click functionality. Only call it
+*first time through to show the changed totals.
+    CALL METHOD lcl_alvgrid->refresh_table_display
+      EXPORTING
+        i_soft_refresh = c_true.
+  ENDIF.
+
+ENDFORM.                    "ALV_SUBTOTAL_GRID
+
+*&---------------------------------------------------------------------*
+*&      Form  ALV_SUBTOTAL_LIST
+*&---------------------------------------------------------------------*
+*       Subtotals have all been calculated at this stage.
+*       Get totals and subtotal1. Loop through and apply custom
+*       calculation to the subtotal fields for the gross_cont_perc field
+*       A soft refresh of the grid is then required to make the new
+*       totals show immediately.
+*&---------------------------------------------------------------------*
+FORM alv_subtotal_list USING p_line TYPE slis_lineinfo.
+*Set the percentages for subtotals
+  DATA: lw_subtot LIKE it_difot,
+        lw_subt   LIKE it_subt,
+        l_ty(1)   TYPE c,
+        l_cmp     TYPE i,
+        l_cont(1) TYPE c.
+  FIELD-SYMBOLS: <subt>, <difot>.
+
+  CHECK p_alis EQ c_true.
+  CHECK p_line-subtot EQ c_true OR p_line-endsum EQ c_true.
+  MOVE-CORRESPONDING it_difot TO lw_subtot.
+  CLEAR: lw_subt.
+  MOVE-CORRESPONDING lw_subtot TO lw_subt.
+  CASE c_true.
+    WHEN p_line-endsum.
+      DESCRIBE TABLE it_difot LINES lw_subt-cnt.
+
+      SUBTRACT v_reduce FROM lw_subt-cnt.
+*     Start SD1K997352 - Fix issue with Totals
+      CLEAR: lw_subt-cnt.
+      LOOP AT it_difot WHERE line_t = '1'.
+        lw_subt-cnt = lw_subt-cnt + 1.
+      ENDLOOP.
+*     End SD1K997352
+      lw_subtot-name1 = 'Total'.
+    WHEN p_line-subtot.
+      REFRESH: it_redu.
+      DESCRIBE FIELD lw_subtot TYPE l_ty COMPONENTS l_cmp.
+      LOOP AT it_difot.
+*       Start SD1K993079 - Summing: Check reducer
+
+        READ TABLE it_redu WITH KEY vbeln = it_difot-vbeln
+                                    posnr = it_difot-posnr.
+        CHECK sy-subrc NE 0.
+        MOVE-CORRESPONDING it_difot TO it_redu.
+        APPEND it_redu.
+*       End SD1K993079
+
+        l_cont = c_true.
+        DO l_cmp TIMES.
+          ASSIGN COMPONENT sy-index OF STRUCTURE lw_subtot TO <subt>.
+          DESCRIBE FIELD <subt> TYPE l_ty.
+          CHECK l_ty EQ 'C' OR l_ty EQ 'D' OR l_ty EQ 'T'.
+          ASSIGN COMPONENT sy-index OF STRUCTURE it_difot TO <difot>.
+          CHECK NOT <subt> IS INITIAL AND <subt> NE <difot>.
+          CLEAR: l_cont.
+          EXIT.
+        ENDDO.
+        CHECK l_cont EQ c_true.
+        IF it_difot-line_t = '1'.
+          ADD 1 TO lw_subt-cnt.
+        ENDIF.
+      ENDLOOP.
+      lw_subtot-name1 = 'Subtotal'.
+  ENDCASE.
+  PERFORM set_subtotal USING lw_subtot lw_subt.
+  MOVE-CORRESPONDING lw_subtot TO it_difot.
+
+ENDFORM.                    "ALV_SUBTOTAL_LIST
+
+*&---------------------------------------------------------------------*
+*&      Form  ALV_REFRESH
+*&---------------------------------------------------------------------*
+FORM alv_refresh.
+
+  SUBMIT (v_repid)
+    WITH s_vtweg IN s_vtweg
+    WITH s_werks IN s_werks
+    WITH s_kunnr IN s_kunnr
+    WITH s_kunwe IN s_kunwe
+    WITH s_mtart IN s_mtart
+    WITH s_matnr IN s_matnr
+    WITH s_auart IN s_auart
+    WITH s_vbeln IN s_vbeln
+    WITH s_edatu IN s_edatu
+    WITH s_erdat IN s_erdat
+    WITH s_ernam IN s_ernam
+*    WITH p_nocon EQ p_nocon    "Ins SD1K993079
+*    WITH p_consam EQ p_consam
+*    WITH p_contol EQ p_contol  "Ins SD1K993079
+    WITH p_subt EQ p_subt
+    WITH p_agrd EQ p_agrd
+    WITH p_alis EQ p_alis
+    WITH p_var EQ p_var
+    AND RETURN.
+
+ENDFORM.                    "ALV_REFRESH
+
+*&---------------------------------------------------------------------*
+*&      Form  set_subtotal
+*&---------------------------------------------------------------------*
+FORM set_subtotal USING pw_subtotal STRUCTURE st_rep_alv1
+                        p_subt STRUCTURE it_subt.
+  DATA: l_no TYPE p DECIMALS 3.
+
+* Start SD1K993079 - Calculate TotDelQty% total sum
+* Start SD1K997352 - Use WMENG for quantitiy calculations
+*  IF NOT pw_subtotal-lmeng IS INITIAL AND
+*     NOT pw_subtotal-lfmng IS INITIAL.
+*    l_no = ( pw_subtotal-lfmng / pw_subtotal-lmeng ) * 100.
+  IF NOT pw_subtotal-wmeng IS INITIAL AND
+     NOT pw_subtotal-lfmng IS INITIAL.
+    l_no = ( pw_subtotal-lfimg / pw_subtotal-wmeng ) * 100.
+* End SD1K997352
+    MOVE l_no TO pw_subtotal-lfmng_c_p.
+  ELSE.
+    CLEAR: pw_subtotal-lfmng_c_p.
+  ENDIF.
+* End SD1K993079
+
+  CHECK p_subt-cnt NE 0.
+  pw_subtotal-line_t = p_subt-cnt.
+  l_no = ( p_subt-dif_o / p_subt-cnt ) * 100.   "Ins SD1K994923
+  MOVE l_no TO pw_subtotal-dif_op.              "Ins SD1K994923
+  l_no = ( p_subt-dif / p_subt-cnt ) * 100.
+  MOVE l_no TO pw_subtotal-dif_p.
+  l_no = ( p_subt-dot_o / p_subt-cnt ) * 100.
+  MOVE l_no TO pw_subtotal-dot_op.
+  l_no = ( p_subt-dot / p_subt-cnt ) * 100.
+  MOVE l_no TO pw_subtotal-dot_p.
+  l_no = ( p_subt-difot_o / p_subt-cnt ) * 100.
+  MOVE l_no TO pw_subtotal-difot_op.
+  l_no = ( p_subt-difot / p_subt-cnt ) * 100.
+  MOVE l_no TO pw_subtotal-difot_p.
+
+ENDFORM.                    "SET_SUBTOTAL
+
+*&---------------------------------------------------------------------*
+*&      Form  alv_assign_layout
+*&---------------------------------------------------------------------*
+*       Sets up ALV layouts for use in program. This allows users to
+*       select/save layouts for the output.
+*       The value w_variant and v_save must be passed to
+*       REUSE_ALV_GRID_DISPLAY (or whichever FM is being used).
+*----------------------------------------------------------------------*
+FORM alv_assign_layout.
+
+  IF NOT p_var IS INITIAL.
+    MOVE p_var TO w_variant-variant.
+    CALL FUNCTION 'REUSE_ALV_VARIANT_EXISTENCE'
+      EXPORTING
+        i_save     = v_save
+      CHANGING
+        cs_variant = w_variant.
+  ELSE.
+    CLEAR w_variant.
+    w_variant-report = v_repid.
+  ENDIF.
+
+ENDFORM.                    " alv_assign_layout
+*&---------------------------------------------------------------------*
+*&      Form  alv_pf_status
+*&---------------------------------------------------------------------*
+*       Status STANDARD used for the slightly different Excel icon &XXL
+*&---------------------------------------------------------------------*
+FORM alv_pf_status USING gt_extab TYPE slis_t_extab.        "#EC CALLED
+  SET PF-STATUS 'STANDARD'.
+
+ENDFORM.                    "pf_status_se
+
+*------------------------------------*
+*       FORM BDC_DYNPRO
+*------------------------------------*
+FORM bdc_dynpro USING program dynpro.
+  CLEAR it_bdcdata.
+  it_bdcdata-program  = program.
+  it_bdcdata-dynpro   = dynpro.
+  it_bdcdata-dynbegin = c_true.
+  APPEND it_bdcdata.
+ENDFORM.                    "bdc_dynpro
+
+*------------------------------------*
+*       FORM BDC_FIELD
+*------------------------------------*
+FORM bdc_field USING fnam
+                     fval.
+  CLEAR it_bdcdata.
+  it_bdcdata-fnam = fnam.
+  it_bdcdata-fval = fval.
+  APPEND it_bdcdata.
+ENDFORM.                    "bdc_field
+
+*&---------------------------------------------------------------------*
+*&      Form  button_click
+*&---------------------------------------------------------------------*
+*       Call transaction ZS105 when button is clicked
+*----------------------------------------------------------------------*
+FORM button_click.
+  IF sscrfields-ucomm EQ 'FC01'.
+    CALL TRANSACTION 'ZS105'.
+  ENDIF .
+ENDFORM.                    "button_click
+
+
+* Start SD1K9A02UE - Retrieve STO data
+*---------------------------------------------------------------------*
+*       FORM A01_STORE_THE_PURCHASING_DATA                            *
+*---------------------------------------------------------------------*
+*       Retrieve STO data.  Logic copied and adjusted from ZRSA0008.  *
+*---------------------------------------------------------------------*
+FORM a01_store_the_purchasing_data.
+
+  DATA: BEGIN OF it_item_data OCCURS 0.
+          INCLUDE STRUCTURE zd_vbak4.
+  DATA: umziz        LIKE vbap-umziz,     "Sales->base numer.
+        umzin        LIKE vbap-umziz,     "Sales->base denom.
+        name1        LIKE kna1-name1,     "Sold-to cust name
+        kunwe        LIKE vbpa-kunnr,     "Ship-to cust
+        name2        LIKE kna1-name1,     "Ship-to cust name
+        ort01        LIKE kna1-ort01,     "Ship-to city
+        regio        LIKE kna1-regio,     "Ship-to Region
+        rfmng        LIKE vbfa-rfmng,     "Del qty (base uom)
+        rfmng_suom   LIKE vbfa-rfmng,     "Del qty (sales uom)
+        sfd          LIKE vbfa-rfmng,     "Sched for del (base)
+        sfd_suom     LIKE vbfa-rfmng,     "Sched for del (sales uom)
+        mvke_vrkme   LIKE mvke-vrkme,     "Sales uom
+        worig        LIKE likp-wadat_ist, "Orig. due date
+        tddat        LIKE vbep-tddat,     "Transportation date
+        ernam        TYPE ernam,
+        pur_order(1),                    "Mark po
+        END OF it_item_data.
+
+  DATA: l_menge LIKE eket-menge,   "Order qty
+        l_glmng LIKE eket-glmng,   "Scheduled
+        l_wamng LIKE eket-wamng.   "Issued
+
+
+  CHECK NOT p_sto IS INITIAL.
+  CLEAR: it_item_data.
+
+* Get Purchase Order Header data
+  SELECT ebeln reswk aedat ernam
+    FROM ekko
+    INTO (it_item_data-vbeln, it_item_data-werks,
+          it_item_data-audat, it_item_data-ernam)
+   WHERE ebeln IN s_ebeln             " purchase number
+     AND bedat IN s_erdat "s_audat (KH)
+     AND bsart IN s_bsart             " purchase doc type
+     AND reswk IN s_werks             " plant
+     AND reswk IN r_werks.            " Ins SD1K993840
+
+*   Get Purchase Order Item data
+    SELECT ebelp txz01 matnr meins matkl
+           bprme umrez umren lmein
+      FROM ekpo
+      INTO (it_item_data-posnr, it_item_data-maktx,
+            it_item_data-matnr, it_item_data-vrkme,
+            it_item_data-matkl, it_item_data-mvke_vrkme,
+            it_item_data-umziz, it_item_data-umzin,
+            it_item_data-meins)
+     WHERE ebeln = it_item_data-vbeln
+       AND loekz = ''
+       AND matnr IN s_matnr
+*       AND elikz <> 'X'   "KH - Delivery completed
+*        AND matkl IN s_matkl
+       AND mtart IN s_mtart.
+*        AND lgort IN s_lgort.
+
+*     Get Shipping Data for STO
+      SELECT kunnr vstel vkorg vtweg spart
+        FROM ekpv
+        INTO (it_item_data-kunwe, it_item_data-vstel,
+              it_item_data-vkorg, it_item_data-vtweg,
+              it_item_data-spart)
+*             it_item_data-tddat "removed as is blank when fully del
+       WHERE ebeln = it_item_data-vbeln
+         AND ebelp = it_item_data-posnr
+*         AND vstel IN s_vstel   "KH
+         AND kunnr IN s_kunwe   "Ship-to party
+*         AND kunag IN s_kunnr.   "Sold-to party
+         AND kunnr IN s_kunnr.   "Sold-to party
+*         AND ledat IN s_tddat.  "Delivery Creation Date
+
+        CHECK sy-subrc EQ 0.
+
+*       Get customer details
+        SELECT SINGLE name1 regio ort01
+          FROM kna1
+          INTO (it_item_data-name2, it_item_data-regio,
+                it_item_data-ort01)
+          WHERE kunnr = it_item_data-kunwe.
+*                AND regio IN s_regio.  "KH
+
+        CLEAR: it_item_data-wmeng,   "Ordered
+               it_item_data-sfd_suom,   "Scheduled (delivery created)
+               it_item_data-rfmng_suom.   "Issued
+*
+        SELECT eindt menge glmng wamng FROM eket
+          INTO (it_item_data-tddat, "Set TrpPlnDt to Del Date
+                l_menge,   "Order qty
+                l_glmng,   "Scheduled
+                l_wamng)   "Issued
+          WHERE ebeln = it_item_data-vbeln
+            AND ebelp = it_item_data-posnr
+*            AND eindt IN s_tddat   "(Trans Date) "KH
+            AND eindt IN s_edatu.  "(Req. Del Date)
+*
+*         Ordered
+          it_item_data-wmeng = it_item_data-wmeng + l_menge.
+*
+**         If not displaying scheduled for delivery, all scheduled
+**         go into issued.
+**          IF p_sfd NE 'X'.  :KH
+**           Issued
+          it_item_data-rfmng_suom = l_glmng.
+** Start Del KH
+**          ELSE.
+***           Issued
+**            it_item_data-rfmng_suom = it_item_data-rfmng_suom +
+**                                      l_wamng.
+***           Scheduled
+**            it_item_data-sfd_suom = it_item_data-sfd_suom + l_glmng.
+**          ENDIF.
+** End Del KH
+
+        ENDSELECT.
+        IF sy-subrc NE 0.
+          CONTINUE.
+        ENDIF.
+
+*        IF it_item_data-wmeng > it_item_data-rfmng_suom.  "KH
+*         Set sold-to to ship to
+        it_item_data-kunnr = it_item_data-kunwe.
+        it_item_data-name1 = it_item_data-name2.
+
+*       Set Requested Delivery Date to Delivery Date
+        it_item_data-edatu = it_item_data-tddat.
+
+*       Set Orig.Due Date to Delivery Date
+        it_item_data-worig = it_item_data-tddat.
+
+**         Set Scheduled Qty (Scheduled - Issued)
+*          it_item_data-sfd_suom = it_item_data-sfd_suom -
+*                                  it_item_data-rfmng_suom.
+
+        MOVE 'X' TO it_item_data-pur_order.
+        APPEND it_item_data.
+*        ENDIF.  "KH
+
+      ENDSELECT.
+    ENDSELECT.
+  ENDSELECT.
+
+  SORT it_item_data
+    BY pur_order matnr.
+
+
+  CLEAR: it_vbep.
+  LOOP AT it_item_data.
+    MOVE-CORRESPONDING it_item_data TO it_vbep.
+    it_vbep-erdat = it_item_data-audat.
+
+*   Qty in Base UOM
+    IF ( it_item_data-umziz NE 1 OR it_item_data-umzin NE 1 ) AND
+      it_item_data-umziz NE 0 AND it_item_data-umzin NE 0.
+      it_vbep-lmeng = it_vbep-wmeng *
+                     ( it_item_data-umziz / it_item_data-umzin ).
+    ELSE.
+      it_vbep-lmeng = it_vbep-wmeng.
+    ENDIF.
+
+*   Item Qty in Base UOM
+    it_vbep-klmeng = it_vbep-lmeng.
+
+*   Set Plan GI Date to Req Del Date
+    it_vbep-wadat = it_item_data-edatu.
+
+*   Set Orig Planned GI Date to Req Del Date
+    it_vbep-zz_wadat_org = it_item_data-edatu.
+
+
+    it_vbep-pur_order = abap_true.
+    APPEND it_vbep.
+  ENDLOOP.
+
+ENDFORM.                    "a01_store_the_purchasing_data
+* End SD1K9A02UE
